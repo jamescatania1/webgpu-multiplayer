@@ -10,7 +10,7 @@ export default class Cube implements SceneObject {
 	private indexBuffer: WebGLBuffer;
     private numIndices: number;
 
-	constructor(gl: WebGLRenderingContext) {
+	constructor(gl: WebGL2RenderingContext) {
 
         // make the shader
 		const vertexShader = `
@@ -94,7 +94,7 @@ export default class Cube implements SceneObject {
         this.numIndices = indices.length;
 	}
 
-	public draw(gl: WebGLRenderingContext, scene: Scene, camera: Camera) {
+	public draw(gl: WebGL2RenderingContext, scene: Scene, camera: Camera) {
 		// position buffer
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
 		gl.vertexAttribPointer(this.shader.attributes.vertex_pos, 3, gl.FLOAT, false, 0, 0);

@@ -10,49 +10,33 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-var keys = []string{"vt", "vn", "v", "f"}
 var debug = false
 
-func readLine(scanner *bufio.Scanner) (string, string, error) {
+type LineType string
+
+var face LineType = "f"
+var vertex LineType = "v"
+
+func readLine(scanner *bufio.Scanner) (LineType, []string, error) {
 	line := strings.TrimSpace(scanner.Text())
 	if len(line) == 0 || line[0] == '#' {
-		return "", "", errors.New("comment or empty")
+		return "", nil, errors.New("comment or empty")
 	}
-	for _, key := range keys {
-		if strings.HasPrefix(line, key) {
-			return key, strings.TrimSpace(strings.TrimPrefix(line, key)), nil
-		}
+	vals := strings.Fields(line)
+	key := LineType(vals[0])
+	if key == vertex || key == face {
+		return key, vals[1:], nil
 	}
-	return "", "", errors.New("unexpected/unsupported prefix")
+	return "", nil, errors.New("unexpected/unsupported prefix: " + vals[0])
 }
 
-func write[V any, I any](output *os.File, vertices []V, textures []V, normals []V, vertIndices []I, texIndices []I, normIndices []I) {
-	binary.Write(output, binary.LittleEndian, uint32(len(vertices)))
-	binary.Write(output, binary.LittleEndian, uint32(len(textures)))
-	binary.Write(output, binary.LittleEndian, uint32(len(normals)))
-	binary.Write(output, binary.LittleEndian, uint32(len(vertIndices)))
-	binary.Write(output, binary.LittleEndian, uint32(len(texIndices)))
-	binary.Write(output, binary.LittleEndian, uint32(len(normIndices)))
-	for i := 0; i < len(vertices); i++ {
-		binary.Write(output, binary.LittleEndian, vertices[i])
-	}
-	for i := 0; i < len(textures); i++ {
-		binary.Write(output, binary.LittleEndian, textures[i])
-	}
-	for i := 0; i < len(normals); i++ {
-		binary.Write(output, binary.LittleEndian, normals[i])
-	}
-	for i := 0; i < len(vertIndices); i++ {
-		binary.Write(output, binary.LittleEndian, vertIndices[i])
-	}
-	for i := 0; i < len(texIndices); i++ {
-		binary.Write(output, binary.LittleEndian, texIndices[i])
-	}
-	for i := 0; i < len(normIndices); i++ {
-		binary.Write(output, binary.LittleEndian, normIndices[i])
+func writeIndices[I any](output *os.File, indices []uint32, indexConv func(uint32) I) {
+	for i := 0; i < len(indices); i++ {
+		binary.Write(output, binary.LittleEndian, indexConv(indices[i]-1))
 	}
 }
 
@@ -83,134 +67,146 @@ func main() {
 	}
 	defer output.Close()
 
+	// Read input file
 	scanner := bufio.NewScanner(input)
 	vertices := make([]float32, 0)
-	textures := make([]float32, 0)
-	normals := make([]float32, 0)
-	vertIndices := make([]uint32, 0)
-	texIndices := make([]uint32, 0)
-	normIndices := make([]uint32, 0)
+	colors := make([]float32, 0)
+	indices := make([]uint32, 0)
 	var maxIndex uint32 = 0
+	maxVertex := 0.0
 	for scanner.Scan() {
 		key, vals, err := readLine(scanner)
 		if err != nil {
 			continue
 		}
 		switch key {
-		case "v": // vertex
-			var x, y, z float32
-			if _, err := fmt.Sscanf(vals, "%f %f %f", &x, &y, &z); err != nil {
-				fmt.Printf("Error parsing vertex: %v\n", err)
+		case vertex:
+			if len(vals) != 3 && len(vals) != 6 {
+				fmt.Println("Error: vertex must have 3 or 6 values.")
 				os.Exit(1)
 			}
-			vertices = append(vertices, x, y, z)
-		case "vt": // vertex texture coords
-			var u, v float32
-			if _, err := fmt.Sscanf(vals, "%f %f", &u, &v); err != nil {
-				fmt.Printf("Error parsing vertex texture coordinate: %v\n", err)
-				os.Exit(1)
+			for _, val := range vals[:3] {
+				if w, err := strconv.ParseFloat(val, 32); err == nil {
+					vertices = append(vertices, float32(w))
+					maxVertex = max(maxVertex, math.Abs(w))
+				} else {
+					fmt.Printf("Error parsing vertex: %v\n", err)
+					os.Exit(1)
+				}
 			}
-			textures = append(textures, u, v)
-		case "vn": // vertex normals
-			var dx, dy, dz float32
-			if _, err := fmt.Sscanf(vals, "%f %f %f", &dx, &dy, &dz); err != nil {
-				fmt.Printf("Error parsing vertex normal: %v\n", err)
-				os.Exit(1)
-			}
-			normals = append(normals, dx, dy, dz)
-		case "f": // face
-			faceType := 0
-			for i := range vals {
-				if vals[i] == '/' {
-					if faceType == 0 {
-						faceType = 1
-					} else if faceType == 1 {
-						if vals[i-1] == '/' {
-							faceType = 2
-						} else {
-							faceType = 3
-						}
-						break
+			if len(vals) == 6 {
+				for _, val := range vals[3:6] {
+					if q, err := strconv.ParseFloat(val, 32); err == nil {
+						colors = append(colors, float32(q))
+					} else {
+						fmt.Printf("Error parsing vertex color: %v\n", err)
+						os.Exit(1)
 					}
-				} else if vals[i] == ' ' {
-					break
 				}
 			}
-			vals = strings.ReplaceAll(vals, "/", " ")
-			switch faceType {
-			case 0: // just vertex indices
-				var v1, v2, v3 uint32
-				if _, err := fmt.Sscanf(vals, "%d %d %d", &v1, &v2, &v3); err != nil {
-					fmt.Printf("Error parsing face: %v\n", err)
+		case face:
+			if len(vals) != 3 {
+				fmt.Println("Error: face must have 3 values.")
+				os.Exit(1)
+			}
+			for _, val := range vals {
+				if strings.Contains(val, "/") {
+					fmt.Println("Error: face contains texture or normal indices. Only vertex indices are supported.")
 					os.Exit(1)
 				}
-				vertIndices = append(vertIndices, v1, v2, v3)
-				maxIndex = max(maxIndex, v1, v2, v3)
-			case 1: // vertex and texture indices
-				var v1, v2, v3, t1, t2, t3 uint32
-				if _, err := fmt.Sscanf(vals, "%d %d %d %d %d %d", &v1, &t1, &v2, &t2, &v3, &t3); err != nil {
-					fmt.Printf("Error parsing face: %v\n", err)
+				if i, err := strconv.ParseUint(val, 10, 32); err == nil {
+					maxIndex = max(maxIndex, uint32(i))
+					indices = append(indices, uint32(i))
+				} else {
+					fmt.Printf("Error parsing face index: %v\n", err)
 					os.Exit(1)
 				}
-				vertIndices = append(vertIndices, v1, v2, v3)
-				texIndices = append(texIndices, t1, t2, t3)
-				maxIndex = max(maxIndex, v1, v2, v3, t1, t2, t3)
-			case 2: // vertex and normal indices
-				var v1, v2, v3, n1, n2, n3 uint32
-				if _, err := fmt.Sscanf(vals, "%d  %d  %d  %d  %d  %d", &v1, &n1, &v2, &n2, &v3, &n3); err != nil {
-					fmt.Printf("Error parsing face: %v\n", err)
-					os.Exit(1)
-				}
-				vertIndices = append(vertIndices, v1, v2, v3)
-				normIndices = append(normIndices, n1, n2, n3)
-				maxIndex = max(maxIndex, v1, v2, v3, n1, n2, n3)
-			case 3: // vertex, texture, normal indices
-				var v1, v2, v3, t1, t2, t3, n1, n2, n3 uint32
-				if _, err := fmt.Sscanf(vals, "%d %d %d %d %d %d %d %d %d", &v1, &t1, &n1, &v2, &t2, &n2, &v3, &t3, &n3); err != nil {
-					fmt.Printf("Error parsing face: %v\n", err)
-					os.Exit(1)
-				}
-				vertIndices = append(vertIndices, v1, v2, v3)
-				texIndices = append(texIndices, t1, t2, t3)
-				normIndices = append(normIndices, n1, n2, n3)
-				maxIndex = max(maxIndex, v1, v2, v3, t1, t2, t3, n1, n2, n3)
 			}
 		}
 	}
 
+	// Compute normals
+	normals := make([]float32, len(vertices))
+	connectedTriCount := make([]int, len(vertices)/3)
+	for i := 0; i < len(indices); i += 3 {
+		i1 := indices[i] - 1
+		i2 := indices[i+1] - 1
+		i3 := indices[i+2] - 1
+		v1 := vertices[i1*3 : i1*3+3]
+		v2 := vertices[i2*3 : i2*3+3]
+		v3 := vertices[i3*3 : i3*3+3]
+		n := cross(subtract(v2, v1), subtract(v3, v1))
+		normalize(n)
+		connectedTriCount[i1]++
+		connectedTriCount[i2]++
+		connectedTriCount[i3]++
+		var j uint32
+		for j = 0; j < 3; j++ {
+			normals[i1*3+j] += n[j]
+			normals[i2*3+j] += n[j]
+			normals[i3*3+j] += n[j]
+		}
+	}
+	for i := 0; i < len(normals); i++ {
+		normals[i] /= float32(connectedTriCount[i/3])
+	}
+
+	var indexBytes uint8
 	if maxIndex > math.MaxUint16 { // encode as 32-bit indices
-		output.Write([]uint8{4})
-		write(output, vertices, textures, normals, vertIndices, texIndices, normIndices)
+		indexBytes = 4
 	} else if maxIndex > math.MaxUint8 { // encode as 16-bit indices
-		output.Write([]uint8{2})
-		vIndices := make([]uint16, len(vertIndices))
-		for i, x := range vertIndices {
-			vIndices[i] = uint16(x)
-		}
-		tIndices := make([]uint16, len(texIndices))
-		for i, x := range texIndices {
-			tIndices[i] = uint16(x)
-		}
-		nIndices := make([]uint16, len(normIndices))
-		for i, x := range normIndices {
-			nIndices[i] = uint16(x)
-		}
-		write(output, vertices, textures, normals, vIndices, tIndices, nIndices)
+		indexBytes = 2
 	} else { // encode as 8-bit indices
-		output.Write([]uint8{1})
-		vIndices := make([]uint8, len(vertIndices))
-		for i, x := range vertIndices {
-			vIndices[i] = uint8(x)
+		indexBytes = 1
+	}
+
+	scaleFactor := 1.0
+	if maxVertex > 0.5 {
+		scaleFactor = 0.5 / maxVertex
+	}
+
+	hasColor := len(vertices) == len(colors)
+	if !hasColor && len(colors) > 0 {
+		fmt.Println("Error: colors are present but not all vertices have a color.")
+		os.Exit(1)
+	}
+	if len(vertices)%3 != 0 {
+		fmt.Println("Error: vertices must be in groups of 3.")
+		os.Exit(1)
+	}
+
+	// Write output file
+	binary.Write(output, binary.LittleEndian, indexBytes)
+	if hasColor {
+		binary.Write(output, binary.LittleEndian, uint8(1))
+	} else {
+		binary.Write(output, binary.LittleEndian, uint8(0))
+	}
+	binary.Write(output, binary.LittleEndian, scaleFactor)
+	binary.Write(output, binary.LittleEndian, uint32(len(vertices))) // 3 * 32-bit packed per vertex
+	binary.Write(output, binary.LittleEndian, uint32(len(indices)))
+	for i := 0; i < len(vertices); i += 3 {
+		x := uint16((float64(vertices[i])*scaleFactor + 0.5) * float64(math.MaxUint16))
+		y := uint16((float64(vertices[i+1])*scaleFactor + 0.5) * float64(math.MaxUint16))
+		z := uint16((float64(vertices[i+2])*scaleFactor + 0.5) * float64(math.MaxUint16))
+		var c uint16 = math.MaxUint16
+		if hasColor { // colors are present, pack as rgb-5_6_5
+			c = uint16(colors[i]*31)<<11 | uint16(colors[i+1]*63)<<5 | uint16(colors[i+2]*31)
 		}
-		tIndices := make([]uint8, len(texIndices))
-		for i, x := range texIndices {
-			tIndices[i] = uint8(x)
-		}
-		nIndices := make([]uint8, len(normIndices))
-		for i, x := range normIndices {
-			nIndices[i] = uint8(x)
-		}
-		write(output, vertices, textures, normals, vIndices, tIndices, nIndices)
+		binary.Write(output, binary.LittleEndian, uint32(x)<<16|uint32(y))
+		binary.Write(output, binary.LittleEndian, uint32(z)<<16|uint32(c))
+		nx := uint32((normals[i] + 1.0) * 0.5 * 1023.0)
+		ny := uint32((normals[i+1] + 1.0) * 0.5 * 1023.0)
+		nz := uint32((normals[i+2] + 1.0) * 0.5 * 1023.0)
+		binary.Write(output, binary.LittleEndian, nx<<22|ny<<12|nz<<2) // pack normals as xyz-10_10_10
+	}
+	switch indexBytes {
+	case 1:
+		writeIndices(output, indices, func(i uint32) uint8 { return uint8(i) })
+	case 2:
+		writeIndices(output, indices, func(i uint32) uint16 { return uint16(i) })
+	case 4:
+		writeIndices(output, indices, func(i uint32) uint32 { return i })
 	}
 
 	path, err := filepath.Abs(*out)
@@ -221,12 +217,29 @@ func main() {
 
 	if debug {
 		log.Println("vertex count: ", len(vertices))
-		log.Println("texture coord count: ", len(textures))
-		log.Println("normal count: ", len(normals))
-		log.Println("vertex index count: ", len(vertIndices))
-		log.Println("texture index count: ", len(texIndices))
-		log.Println("normal index count: ", len(normIndices))
+		log.Println("index count: ", len(indices))
+		log.Println("index byte size: ", indexBytes)
+		log.Println("max index: ", maxIndex)
 	}
 
 	fmt.Printf("Wrote to %s\n", path)
+}
+
+func cross(v1 []float32, v2 []float32) []float32 {
+	return []float32{
+		v1[1]*v2[2] - v1[2]*v2[1],
+		v1[2]*v2[0] - v1[0]*v2[2],
+		v1[0]*v2[1] - v1[1]*v2[0],
+	}
+}
+
+func subtract(v1 []float32, v2 []float32) []float32 {
+	return []float32{v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]}
+}
+
+func normalize(v []float32) {
+	len := math.Sqrt(float64(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]))
+	v[0] = float32(float64(v[0]) / len)
+	v[1] = float32(float64(v[1]) / len)
+	v[2] = float32(float64(v[2]) / len)
 }

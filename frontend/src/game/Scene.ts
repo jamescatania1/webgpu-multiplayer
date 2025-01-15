@@ -3,16 +3,11 @@ import Camera from "./Camera";
 import Cube from "./Cube";
 import type Input from "./Input";
 import Model from "./Model";
-
-type SceneContext = {
-	gl: WebGLRenderingContext;
-	scene: Scene;
-	camera: Camera;
-};
+import { loadShaders, type Shaders } from "./Shaders";
 
 export interface SceneObject {
 	update?(): void;
-	draw(gl: WebGLRenderingContext, scene: Scene, camera: Camera): void;
+	draw(gl: WebGL2RenderingContext, scene: Scene, camera: Camera): void;
 }
 
 const MAX_VEL = 1.0;
@@ -20,8 +15,9 @@ const ACCEL = 0.01;
 const MOUSE_SENSITIVITY = 2.0;
 
 export default class Scene {
+	public shaders: Shaders;
+
 	private camera: Camera;
-	private ctx: SceneContext;
 	private objects: SceneObject[] = [];
 
 	private input: vec2 = vec2.create();
@@ -29,20 +25,20 @@ export default class Scene {
 	private vel: vec3 = vec3.create();
 	private accelY: vec3 = vec3.create();
 
-	constructor(gl: WebGLRenderingContext) {
+	monke: Model;
+
+	constructor(gl: WebGL2RenderingContext) {
+		this.shaders = loadShaders(gl);
 		this.camera = new Camera(gl);
-		this.ctx = {
-			gl: gl,
-			scene: this,
-			camera: this.camera,
-		};
 
-		this.camera.position[2] = 4.5;
-		this.camera.position[0] = -6.0;
-		this.camera.position[1] = 3.0;
-		// this.add(new Cube(gl));
+		this.camera.position[2] = 5.0;
 
-		this.add(new Model(gl));
+		this.monke = new Model(gl, "/monke-smooth.bobj", this.shaders.diffuse)
+		this.add(this.monke);
+		const terrain = new Model(gl, "/terrain.bobj", this.shaders.diffuse);
+		terrain.transform.position[1] = -10;
+		terrain.transform.update(gl);
+		this.add(terrain);
 
 		gl.enable(gl.CULL_FACE);
 	}
@@ -55,7 +51,7 @@ export default class Scene {
 		this.objects.splice(this.objects.indexOf(obj), 1);
 	}
 
-	public draw(gl: WebGLRenderingContext, inputManager: Input, deltaTime: number) {
+	public draw(gl: WebGL2RenderingContext, inputManager: Input, deltaTime: number) {
 		// rotate camera with mouse delta
 		if (inputManager.pointerLocked) {
 			this.camera.yaw += inputManager.dx * MOUSE_SENSITIVITY;
@@ -89,7 +85,7 @@ export default class Scene {
 		vec3.scaleAndAdd(this.camera.position, this.camera.position, this.vel, 0.01 * deltaTime);
 
 		// clear everything
-		gl.clearColor(0.0, 0.0, 0.0, 1.0);
+		gl.clearColor(0.6, 0.8, 0.92, 1.0);
 		gl.clearDepth(1.0);
 		gl.enable(gl.DEPTH_TEST);
 		gl.depthFunc(gl.LEQUAL);
@@ -97,6 +93,12 @@ export default class Scene {
 
 		// update camera (should be in update loop idk)
 		this.camera.update(gl);
+		
+		this.monke.transform.position[1] = Math.sin(performance.now() / 200) * 0.1;
+		this.monke.transform.rotation[0] = performance.now() / 100;
+		this.monke.transform.rotation[1] = performance.now() / 100;
+		this.monke.transform.rotation[2] = performance.now() / 100;
+		this.monke.transform.update(gl);
 
 		// draw objects
 		for (const obj of this.objects.values()) {

@@ -1,33 +1,28 @@
-import { vec3 } from "gl-matrix";
+import { mat3, mat4, quat, vec3 } from "gl-matrix";
 
 export default class Transform {
 	public position = vec3.create();
     public rotation = vec3.create();
+    public scale = vec3.fromValues(1, 1, 1);
 
-    // public readonly viewProjMatrix = mat4.create();
+    public readonly matrix = mat4.create();
+    public readonly normalMatrix = mat3.create();
+    public modelScale: number = 1;
 
-    // constructor(gl: WebGLRenderingContext) {
-    //     this.update(gl);
-    // }
+    private finalScale = vec3.create();
+    private normalMatrix4 = mat4.create();
+    private quat = quat.create();
 
-    // public update(gl: WebGLRenderingContext) {
-    //     this.forward[0] = Math.cos(this.yaw);
-    //     this.forward[1] = Math.tan(this.pitch);
-    //     this.forward[2] = Math.sin(this.yaw);
-    //     vec3.normalize(this.forward, this.forward);
-    //     this.right[0] = Math.cos(this.yaw - Math.PI / 2.0);
-    //     this.right[1] = 0;
-    //     this.right[2] = Math.sin(this.yaw - Math.PI / 2.0);
-    //     vec3.cross(this.up, this.forward, this.right);
+    constructor(gl: WebGL2RenderingContext) {
+        this.update(gl);
+    }
+
+    public update(gl: WebGL2RenderingContext) {
+        quat.fromEuler(this.quat, this.rotation[0], this.rotation[1], this.rotation[2]);
+        vec3.scale(this.finalScale, this.scale, this.modelScale);
+        mat4.fromRotationTranslationScale(this.matrix, this.quat, this.position, this.finalScale);
         
-    //     mat4.perspective(
-    //         this.projMatrix,
-    //         (this.fov * Math.PI) / 180,
-    //         gl.canvas.width / gl.canvas.height,
-    //         this.near,
-    //         this.far,
-    //     );
-    //     mat4.lookAt(this.viewMatrix, this.position, vec3.add(vec3.create(), this.position, this.forward), this.up);
-    //     mat4.mul(this.viewProjMatrix, this.projMatrix, this.viewMatrix);
-    // }
+        mat4.fromRotationTranslationScale(this.normalMatrix4, this.quat, this.position, this.scale);
+        mat3.normalFromMat4(this.normalMatrix, this.normalMatrix4);
+    }
 }

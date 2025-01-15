@@ -1,64 +1,46 @@
+import { vec3 } from "gl-matrix";
 import type Camera from "./Camera";
 import type Scene from "./Scene";
 import type { SceneObject } from "./Scene";
 import Shader from "./Shaders";
+import Transform from "./Transform";
 
 type ModelData = {
-	vertexBuffer: WebGLBuffer;
-	indexBuffer: WebGLBuffer;
+	vao: WebGLVertexArrayObject;
 	indexCount: number;
 	indexType: GLenum;
+	scaleFactor: number;
+	hasColor: boolean;
 };
 
 enum ModelReadState {
 	IndexSize,
+	HasColor,
+	ScaleFactor,
 	VertexCount,
-	TexCoordCount,
-	NormalCount,
-	VertIndexCount,
-	TexIndexCount,
-	NormIndexCount,
+	IndexCount,
 	VertexData,
-	TexCoordData,
-	NormalData,
-	VertIndexData,
-	TexIndexData,
-	NormIndexData,
+	IndexData,
 	Done,
 }
 
-const loadBOBJ = (gl: WebGLRenderingContext): Promise<ModelData> => {
-	const url = "/monke-smooth.bobj";
+const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Promise<ModelData> => {
 	const startTime = performance.now();
 	const debug = false;
 
 	let readState = ModelReadState.IndexSize;
 
 	let indexSize: number;
+	let hasColor: boolean;
+	let scaleFactor = 1.0;
+
+	let vertices: Uint32Array;
 	let vertexCount: number;
-	let texCoordCount: number;
-	let normalCount: number;
-	let vertIndexCount: number;
-	let texIndexCount: number;
-	let normIndexCount: number;
+	let verticesWriteIndex = 0;
 
-	let vertices: Float32Array;
-	let vertexWriteIndex = 0;
-
-	let texCoords: Float32Array;
-	let texCoordWriteIndex = 0;
-
-	let normals: Float32Array;
-	let normalWriteIndex = 0;
-
-	let vertIndices: any;
-	let vertIndexWriteIndex = 0;
-
-	let texIndices: any;
-	let texIndexWriteIndex = 0;
-
-	let normIndices: any;
-	let normIndexWriteIndex = 0;
+	let indices: any;
+	let indexCount: number;
+	let indicesWriteIndex = 0;
 
 	return new Promise((resolve, reject) => {
 		try {
@@ -74,21 +56,31 @@ const loadBOBJ = (gl: WebGLRenderingContext): Promise<ModelData> => {
 						console.log("Done reading file");
 						console.log(`Total time to load model: ${(performance.now() - startTime) / 1000} seconds`);
 					}
+					// vao
+					const vao = gl.createVertexArray();
+					gl.bindVertexArray(vao);
+
 					// vertex buffer
 					const vertexBuffer = gl.createBuffer();
 					gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
 					gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+					gl.vertexAttribIPointer(shader.attributes.vertex_data, 3, gl.UNSIGNED_INT, 0, 0);
+					gl.enableVertexAttribArray(shader.attributes.vertex_data);
 
 					// index buffer
 					const indexBuffer = gl.createBuffer();
 					gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-					gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, vertIndices, gl.STATIC_DRAW);
+					gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+					gl.bindVertexArray(null);
 
 					resolve({
-						vertexBuffer: vertexBuffer,
-						indexBuffer: indexBuffer,
-						indexCount: vertIndexCount,
-						indexType: indexSize === 1 ? gl.UNSIGNED_BYTE : indexSize === 2 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
+						vao: vao,
+						indexCount: indexCount,
+						indexType:
+							indexSize === 1 ? gl.UNSIGNED_BYTE : indexSize === 2 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
+						scaleFactor: scaleFactor,
+						hasColor: hasColor,
 					});
 				})
 				.catch((err) => {
@@ -121,141 +113,71 @@ const loadBOBJ = (gl: WebGLRenderingContext): Promise<ModelData> => {
 			const view = new DataView(value.buffer);
 			let readIndex = 0;
 			if (readState === ModelReadState.IndexSize && chunkSize >= 1) {
-				readState = ModelReadState.VertexCount;
+				readState = ModelReadState.HasColor;
 
 				indexSize = view.getUint8(0);
-				if (debug) console.log("index size is", indexSize);
+				if (debug) console.log("index size:", indexSize);
 				readIndex += 1;
 			}
+			if (readState === ModelReadState.HasColor && chunkSize >= 1) {
+				readState = ModelReadState.ScaleFactor;
+
+				hasColor = view.getUint8(0) === 1;
+				if (debug) console.log("has color:", hasColor);
+				readIndex += 1;
+			}
+			if (readState === ModelReadState.ScaleFactor && chunkSize - readIndex >= 8) {
+				readState = ModelReadState.VertexCount;
+
+				scaleFactor = view.getFloat64(readIndex, true);
+				if (debug) console.log("scale factor:", scaleFactor);
+				readIndex += 8;
+			}
 			if (readState === ModelReadState.VertexCount && chunkSize - readIndex >= 4) {
-				readState = ModelReadState.TexCoordCount;
+				readState = ModelReadState.IndexCount;
 
 				vertexCount = view.getUint32(readIndex, true);
-				vertices = new Float32Array(vertexCount);
-				if (debug) console.log("vertex count is", vertexCount);
+				vertices = new Uint32Array(vertexCount);
+				if (debug) console.log("vertex count (packed):", vertexCount);
 				readIndex += 4;
 			}
-			if (readState === ModelReadState.TexCoordCount && chunkSize - readIndex >= 4) {
-				readState = ModelReadState.NormalCount;
-
-				texCoordCount = view.getUint32(readIndex, true);
-				texCoords = new Float32Array(texCoordCount);
-				if (debug) console.log("tex coord count is", texCoordCount);
-				readIndex += 4;
-			}
-			if (readState === ModelReadState.NormalCount && chunkSize - readIndex >= 4) {
-				readState = ModelReadState.VertIndexCount;
-
-				normalCount = view.getUint32(readIndex, true);
-				normals = new Float32Array(normalCount);
-				if (debug) console.log("normal count is", normalCount);
-				readIndex += 4;
-			}
-			if (readState === ModelReadState.VertIndexCount && chunkSize - readIndex >= 4) {
-				readState = ModelReadState.TexIndexCount;
-
-				vertIndexCount = view.getUint32(readIndex, true);
-				switch (indexSize) {
-					case 1:
-						vertIndices = new Uint8Array(vertIndexCount);
-						break;
-					case 2:
-						vertIndices = new Uint16Array(vertIndexCount);
-						break;
-					default:
-						vertIndices = new Uint32Array(vertIndexCount);
-						break;
-				}
-				if (debug) console.log("vert index count is", vertIndexCount);
-				readIndex += 4;
-			}
-			if (readState === ModelReadState.TexIndexCount && chunkSize - readIndex >= 4) {
-				readState = ModelReadState.NormIndexCount;
-
-				texIndexCount = view.getUint32(readIndex, true);
-				switch (indexSize) {
-					case 1:
-						texIndices = new Uint8Array(texIndexCount);
-						break;
-					case 2:
-						texIndices = new Uint16Array(texIndexCount);
-						break;
-					default:
-						texIndices = new Uint32Array(texIndexCount);
-						break;
-				}
-				if (debug) console.log("tex index count is", texIndexCount);
-				readIndex += 4;
-			}
-			if (readState === ModelReadState.NormIndexCount && chunkSize - readIndex >= 4) {
+			if (readState === ModelReadState.IndexCount && chunkSize - readIndex >= 4) {
 				readState = ModelReadState.VertexData;
 
-				normIndexCount = view.getUint32(readIndex, true);
+				indexCount = view.getUint32(readIndex, true);
 				switch (indexSize) {
 					case 1:
-						normIndices = new Uint8Array(normIndexCount);
+						indices = new Uint8Array(indexCount);
 						break;
 					case 2:
-						normIndices = new Uint16Array(normIndexCount);
+						indices = new Uint16Array(indexCount);
 						break;
 					default:
-						normIndices = new Uint32Array(normIndexCount);
+						indices = new Uint32Array(indexCount);
 						break;
 				}
-				if (debug) console.log("norm index count is", normIndexCount);
+				if (debug) console.log("index count:", indexCount);
 				readIndex += 4;
 			}
 			while (readState === ModelReadState.VertexData && chunkSize - readIndex >= 4) {
-				if (vertexWriteIndex >= vertexCount) {
-					readState = ModelReadState.TexCoordData;
+				if (verticesWriteIndex >= vertexCount) {
+					readState = ModelReadState.IndexData;
 					if (debug) {
 						console.log("done reading vertices");
 						console.log(vertices);
 					}
 					break;
 				}
-				const vertex = view.getFloat32(readIndex, true);
-				vertices[vertexWriteIndex] = vertex;
-				vertexWriteIndex += 1;
+				const vertex = view.getUint32(readIndex, true);
+				vertices[verticesWriteIndex] = vertex;
+				verticesWriteIndex += 1;
 				readIndex += 4;
 			}
-			while (readState === ModelReadState.TexCoordData && chunkSize - readIndex >= 4) {
-				if (texCoordWriteIndex >= vertexCount) {
-					readState = ModelReadState.NormalData;
-					if (debug) {
-						console.log("done reading texture coordinates");
-						console.log(texCoords);
-					}
-					break;
-				}
-				const coord = view.getFloat32(readIndex, true);
-				texCoords[texCoordWriteIndex] = coord;
-				texCoordWriteIndex += 1;
-				readIndex += 4;
-			}
-			while (readState === ModelReadState.NormalData && chunkSize - readIndex >= 4) {
-				if (normalWriteIndex >= vertexCount) {
-					readState = ModelReadState.VertIndexData;
-					if (debug) {
-						console.log("done reading normals");
-						console.log(normals);
-					}
-					break;
-				}
-				const norm = view.getFloat32(readIndex, true);
-				normals[normalWriteIndex] = norm;
-				normalWriteIndex += 1;
-				readIndex += 4;
-			}
-			while (readState === ModelReadState.VertIndexData && chunkSize - readIndex >= indexSize) {
-				if (vertIndexWriteIndex >= vertexCount) {
-					readState = ModelReadState.Done;
-					if (debug) {
-						console.log("done reading vertex indices");
-						console.log(vertIndices);
-					}
-					break;
-				}
+			while (
+				readState === ModelReadState.IndexData &&
+				chunkSize - readIndex >= indexSize &&
+				indicesWriteIndex < indexCount
+			) {
 				let index: any;
 				switch (indexSize) {
 					case 1:
@@ -268,9 +190,17 @@ const loadBOBJ = (gl: WebGLRenderingContext): Promise<ModelData> => {
 						index = view.getUint32(readIndex, true);
 						break;
 				}
-				vertIndices[vertIndexWriteIndex] = index;
-				vertIndexWriteIndex += 1;
+				indices[indicesWriteIndex] = index;
+				indicesWriteIndex += 1;
 				readIndex += indexSize;
+
+				if (indicesWriteIndex >= indexCount) {
+					readState = ModelReadState.Done;
+					if (debug) {
+						console.log("done reading vertex indices");
+						console.log(indices);
+					}
+				}
 			}
 
 			if (debug) console.log("reading next chunk");
@@ -283,53 +213,39 @@ export default class Model implements SceneObject {
 	private shader: Shader;
 	private modelData: ModelData | null = null;
 
-	constructor(gl: WebGLRenderingContext) {
-		loadBOBJ(gl)
-        .then((data) => {
-            this.modelData = data;
-		})
-        .catch((err) => {
-            throw new Error(`Error loading model: ${err}`);
-        });
+	public transform: Transform;
 
-		// make the shader
-		const vertexShader = `
-            attribute vec3 vertex_pos;
+	constructor(gl: WebGL2RenderingContext, url: string, shader: Shader) {
+		this.transform = new Transform(gl);
+		this.transform.update(gl);
+		this.shader = shader;
 
-            uniform mat4 view_proj_matrix;
-
-            void main() {
-                gl_Position = view_proj_matrix * vec4(vertex_pos, 1.0);
-            }
-        `;
-		const fragShader = `
-            void main() {
-                gl_FragColor = vec4(0.5, 1.0, 1.0, 1.0);
-            }
-        `;
-		this.shader = new Shader(gl, {
-			vertex: vertexShader,
-			fragment: fragShader,
-			attributes: ["vertex_pos"],
-			uniforms: ["view_proj_matrix"],
-		});
+		loadBOBJ(gl, url, this.shader)
+			.then((data) => {
+				this.modelData = data;
+				// vec3.scale(this.transform.scale, this.transform.scale, 1.0 / data.scaleFactor);
+				this.transform.modelScale = 1.0 / data.scaleFactor;
+				this.transform.update(gl);
+			})
+			.catch((err) => {
+				throw new Error(`Error loading model: ${err}`);
+			});
 	}
 
-	public draw(gl: WebGLRenderingContext, scene: Scene, camera: Camera) {
-        if (!this.modelData) {
-            return;
-        }
-
+	public draw(gl: WebGL2RenderingContext, scene: Scene, camera: Camera) {
+		if (!this.modelData) {
+			return;
+		}
+		
 		// position buffer
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.modelData.vertexBuffer);
-		gl.vertexAttribPointer(this.shader.attributes.vertex_pos, 3, gl.FLOAT, false, 0, 0);
-		gl.enableVertexAttribArray(this.shader.attributes.vertex_pos);
-
+		gl.bindVertexArray(this.modelData.vao);
 		gl.useProgram(this.shader.program);
 
 		// uniforms
 		gl.uniformMatrix4fv(this.shader.uniforms.view_proj_matrix, false, camera.viewProjMatrix);
+		gl.uniformMatrix4fv(this.shader.uniforms.model_matrix, false, this.transform.matrix);
+		gl.uniformMatrix3fv(this.shader.uniforms.normal_matrix, false, this.transform.normalMatrix);
 
-		gl.drawElements(gl.TRIANGLE_STRIP, this.modelData.indexCount, this.modelData.indexType, 0);
+		gl.drawElements(gl.TRIANGLES, this.modelData.indexCount, this.modelData.indexType, 0);
 	}
 }

@@ -16,19 +16,25 @@ export default class Camera {
 	private readonly projMatrix = mat4.create();
 	public readonly viewProjMatrix = mat4.create();
 
-	constructor(gl: WebGLRenderingContext) {
+	constructor(gl: WebGL2RenderingContext) {
 		this.update(gl);
 	}
 
-	public update(gl: WebGLRenderingContext) {
-		this.forward[0] = Math.cos(this.yaw);
+	public update(gl: WebGL2RenderingContext) {
+		this.forward[0] = Math.cos(this.yaw - Math.PI / 2.0);
 		this.forward[1] = Math.tan(this.pitch);
-		this.forward[2] = Math.sin(this.yaw);
+		this.forward[2] = Math.sin(this.yaw - Math.PI / 2.0);
 		vec3.normalize(this.forward, this.forward);
-		this.right[0] = Math.cos(this.yaw - Math.PI / 2.0);
+		this.right[0] = Math.cos(this.yaw - Math.PI / 1.0);
 		this.right[1] = 0;
-		this.right[2] = Math.sin(this.yaw - Math.PI / 2.0);
+		this.right[2] = Math.sin(this.yaw - Math.PI / 1.0);
 		vec3.cross(this.up, this.forward, this.right);
+
+		if (gl.canvas.width != window.innerWidth || gl.canvas.height != window.innerHeight) {
+			gl.canvas.width = window.innerWidth;
+			gl.canvas.height = window.innerHeight;
+			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+		}
 
 		mat4.perspective(
 			this.projMatrix,
