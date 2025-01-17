@@ -54,7 +54,7 @@ inbound:
 	}
 
 	g.hub.broadcast <- &OutboundMessage{
-		Opcode:  gws.OpcodeText,
-		Payload: []byte("tick"),
+		Opcode:  gws.OpcodeBinary,
+		Payload: []uint8{1, 2, 3},
 	}
 }

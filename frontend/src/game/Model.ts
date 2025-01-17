@@ -242,7 +242,6 @@ export default class Model implements SceneObject {
 		gl.useProgram(this.shader.program);
 
 		// uniforms
-		gl.uniformMatrix4fv(this.shader.uniforms.view_proj_matrix, false, camera.viewProjMatrix);
 		gl.uniformMatrix4fv(this.shader.uniforms.model_matrix, false, this.transform.matrix);
 		gl.uniformMatrix3fv(this.shader.uniforms.normal_matrix, false, this.transform.normalMatrix);
 

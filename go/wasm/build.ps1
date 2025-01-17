@@ -1,4 +1,4 @@
 $env:GOOS = "js"
 $env:GOARCH = "wasm"
-go build -o ../../frontend/src/game/wasm/main.wasm
+tinygo build -o ../../frontend/src/game/wasm/main.wasm ./main.go
 Write-Output "WASM build complete"

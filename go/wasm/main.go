@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"syscall/js"
 )
@@ -18,8 +17,10 @@ func onSocketClose(this js.Value, args []js.Value) interface{} {
 }
 
 func onSocketMessage(this js.Value, args []js.Value) interface{} {
-	data := args[0].Get("data")
-	fmt.Println("received message: ", data)
+	buf := js.Global().Get("Uint8Array").New(args[0].Get("data"))
+	data := make([]uint8, buf.Get("length").Int())
+	js.CopyBytesToGo(data, buf)
+	// fmt.Println("received message: ", data)
 	return nil
 }
 
@@ -32,6 +33,7 @@ func SendSocketMessage(data []uint8) {
 
 func main() {
 	ws = js.Global().Get("WebSocket").New("ws://localhost:8080/ws")
+	ws.Set("binaryType", "arraybuffer")
 	ws.Call("addEventListener", "open", js.FuncOf(onSocketOpen))
 	ws.Call("addEventListener", "close", js.FuncOf(onSocketClose))
 	ws.Call("addEventListener", "message", js.FuncOf(onSocketMessage))
@@ -42,7 +44,7 @@ func main() {
 		ws.Call("removeEventListener", "message", js.FuncOf(onSocketMessage))
 	}()
 
-	js.Global().Set("formatJSON", jsonWrapper())
+	// js.Global().Set("formatJSON", jsonWrapper())
 	<-make(chan struct{})
 }
 
@@ -51,31 +53,31 @@ func main() {
 // 	SendSocketMessage([]uint8{1, 2})
 // }
 
-func prettyJson(input string) (string, error) {
-	var raw any
-	if err := json.Unmarshal([]byte(input), &raw); err != nil {
-		return "", err
-	}
-	pretty, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(pretty), nil
-}
+// func prettyJson(input string) (string, error) {
+// 	var raw any
+// 	if err := json.Unmarshal([]byte(input), &raw); err != nil {
+// 		return "", err
+// 	}
+// 	pretty, err := json.MarshalIndent(raw, "", "  ")
+// 	if err != nil {
+// 		return "", err
+// 	}
+// 	return string(pretty), nil
+// }
 
-func jsonWrapper() js.Func {
-	jsonFunc := js.FuncOf(func(this js.Value, args []js.Value) any {
-		if len(args) != 1 {
-			return "Invalid no of arguments passed"
-		}
-		inputJSON := args[0].String()
-		fmt.Printf("input %s\n", inputJSON)
-		pretty, err := prettyJson(inputJSON)
-		if err != nil {
-			fmt.Printf("unable to convert to json %s\n", err)
-			return err.Error()
-		}
-		return pretty
-	})
-	return jsonFunc
-}
+// func jsonWrapper() js.Func {
+// 	jsonFunc := js.FuncOf(func(this js.Value, args []js.Value) any {
+// 		if len(args) != 1 {
+// 			return "Invalid no of arguments passed"
+// 		}
+// 		inputJSON := args[0].String()
+// 		fmt.Printf("input %s\n", inputJSON)
+// 		pretty, err := prettyJson(inputJSON)
+// 		if err != nil {
+// 			fmt.Printf("unable to convert to json %s\n", err)
+// 			return err.Error()
+// 		}
+// 		return pretty
+// 	})
+// 	return jsonFunc
+// }
