@@ -20,7 +20,7 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 		vertex: diffuseVert,
 		fragment: diffuseFrag,
 		attributes: ["vertex_data"],
-		uniforms: ["model_matrix", "normal_matrix"],
+		uniforms: ["model_matrix", "normal_matrix", "is_metallic", "roughness"],
 	});
 	const skybox = new Shader(gl, {
 		vertex: skyboxVert,

@@ -3,9 +3,11 @@ in uvec3 vertex_data;
 
 layout(std140) uniform GlobalData {
     vec3 camera_position;
-    vec3 light_position;
-    vec3 sun_color;
     mat4 view_proj_matrix;
+    vec3 sun_direction;
+    vec3 sun_color;
+    vec3 light_positions[4];
+    vec3 light_colors[4];
 };
 
 uniform mat4 model_matrix;

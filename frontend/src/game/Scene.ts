@@ -21,7 +21,7 @@ export default class Scene {
 	private readonly camera: Camera;
 	private readonly lighting: Lighting;
 	private readonly ubo: WebGLBuffer;
-	private readonly uboBuffer: Float32Array = new Float32Array(96);
+	private readonly cameraUboBuffer: Float32Array = new Float32Array(20);
 	private objects: SceneObject[] = [];
 
 	private readonly input: vec2 = vec2.create();
@@ -41,7 +41,7 @@ export default class Scene {
 		this.monke = new Model(gl, "/monke-smooth.bobj", this.shaders.diffuse);
 		this.add(this.monke);
 		const terrain = new Model(gl, "/terrain.bobj", this.shaders.diffuse);
-		terrain.transform.position[1] = -10;
+		terrain.transform.position[1] = -5;
 		terrain.transform.update(gl);
 		this.add(terrain);
 
@@ -50,9 +50,12 @@ export default class Scene {
 		// create global ubo
 		this.ubo = gl.createBuffer();
 		gl.bindBuffer(gl.UNIFORM_BUFFER, this.ubo);
-		gl.bufferData(gl.UNIFORM_BUFFER, 112, gl.DYNAMIC_DRAW);
-		gl.bindBufferRange(gl.UNIFORM_BUFFER, 0, this.ubo, 0, 112);
+		gl.bufferData(gl.UNIFORM_BUFFER, 240, gl.DYNAMIC_DRAW);
+		gl.bindBufferRange(gl.UNIFORM_BUFFER, 0, this.ubo, 0, 240);
 		gl.bindBuffer(gl.UNIFORM_BUFFER, null);
+
+		// update the lighting range of the ubo
+		this.lighting.updateUBO(gl, this.ubo);
 	}
 
 	public add(obj: SceneObject) {
@@ -108,12 +111,10 @@ export default class Scene {
 		this.camera.update(gl);
 
 		// update global ubo
-		this.uboBuffer.set(this.camera.position);
-		this.uboBuffer.set(this.lighting.sunPosition, 4);
-		this.uboBuffer.set(this.lighting.sunColor, 8);
-		this.uboBuffer.set(this.camera.viewProjMatrix, 12);
+		this.cameraUboBuffer.set(this.camera.position);
+		this.cameraUboBuffer.set(this.camera.viewProjMatrix, 4);
 		gl.bindBuffer(gl.UNIFORM_BUFFER, this.ubo);
-		gl.bufferData(gl.UNIFORM_BUFFER, this.uboBuffer, gl.DYNAMIC_DRAW);
+		gl.bufferSubData(gl.UNIFORM_BUFFER, 0, this.cameraUboBuffer);
 		gl.bindBuffer(gl.UNIFORM_BUFFER, null);
 
 		this.monke.transform.position[1] = Math.sin(performance.now() / 200) * 0.1;

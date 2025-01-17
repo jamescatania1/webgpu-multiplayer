@@ -244,6 +244,8 @@ export default class Model implements SceneObject {
 		// uniforms
 		gl.uniformMatrix4fv(this.shader.uniforms.model_matrix, false, this.transform.matrix);
 		gl.uniformMatrix3fv(this.shader.uniforms.normal_matrix, false, this.transform.normalMatrix);
+		gl.uniform1i(this.shader.uniforms.is_metallic, 0);
+		gl.uniform1f(this.shader.uniforms.roughness, 0.05);
 
 		gl.drawElements(gl.TRIANGLES, this.modelData.indexCount, this.modelData.indexType, 0);
 	}

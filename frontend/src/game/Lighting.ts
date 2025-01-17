@@ -2,10 +2,21 @@ import { vec3 } from "gl-matrix";
 import type Shader from "./Shaders";
 import Camera from "./Camera";
 
-export default class Lighting {
-	public readonly sunPosition = vec3.fromValues(-5, 50, 10);
-	public readonly sunColor = vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0);
+export type PointLight = {
+    position: vec3;
+    color: vec3;
+    intensity: number;
+}
 
+export default class Lighting {
+    public readonly sunColor = vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0);
+    public readonly sunDirection = vec3.create();
+    public readonly pointLights: PointLight[];
+    
+    private readonly maxLights = 4;
+    private readonly uboBuffer = new Float32Array(40);
+	private readonly sunPosition = vec3.fromValues(-5, 50, 10);
+    private readonly sunIntensity = 1.0;
 	private readonly skyboxTexture: WebGLTexture;
 	private readonly skyboxShader: Shader;
 	private readonly skyboxVAO: WebGLVertexArrayObject;
@@ -14,6 +25,20 @@ export default class Lighting {
 	constructor(gl: WebGL2RenderingContext, camera: Camera, skyboxShader: Shader) {
 		this.camera = camera;
 		this.skyboxShader = skyboxShader;
+
+        vec3.normalize(this.sunDirection, this.sunPosition);
+        this.pointLights = [
+            {
+                position: vec3.fromValues(1, 6, 3),
+                color: vec3.fromValues(1, 0, 1),
+                intensity: 1.0,
+            },
+            {
+                position: vec3.fromValues(-1, 2, -2),
+                color: vec3.fromValues(0, 1, 1),
+                intensity: 4.0,
+            },
+        ];
 
 		// load the skybox cubemap
 		this.skyboxTexture = gl.createTexture();
@@ -95,4 +120,19 @@ export default class Lighting {
 		gl.drawElements(gl.TRIANGLES, 36, gl.UNSIGNED_SHORT, 0);
 		gl.bindVertexArray(null);
 	}
+
+    public updateUBO(gl: WebGL2RenderingContext, ubo: WebGLBuffer) {
+        this.uboBuffer.set(this.sunDirection);
+		this.uboBuffer.set(this.sunColor, 4);
+        this.uboBuffer[7] = this.sunIntensity;
+		for (let i = 0; i < this.pointLights.length; i++) {
+			const light = this.pointLights[i];
+            this.uboBuffer.set(light.position, 8 + i * 4);
+			this.uboBuffer.set(light.color, 8 + (this.maxLights + i) * 4);
+		}
+        gl.bindBuffer(gl.UNIFORM_BUFFER, ubo);
+        gl.bufferSubData(gl.UNIFORM_BUFFER, 80, this.uboBuffer);
+        gl.bindBuffer(gl.UNIFORM_BUFFER, null);
+        console.log(this.uboBuffer);
+    }
 }
