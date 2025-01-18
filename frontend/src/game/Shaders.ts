@@ -2,6 +2,13 @@ import {default as diffuseVert} from "./shaders/diffuse.vs";
 import {default as diffuseFrag} from "./shaders/diffuse.fs";
 import {default as skyboxVert} from "./shaders/skybox.vs";
 import {default as skyboxFrag} from "./shaders/skybox.fs";
+import {default as cubemapGenVert} from "./shaders/cubemap_gen.vs";
+import {default as cubemapGenFrag} from "./shaders/cubemap_gen.fs";
+import {default as irradianceGenFrag} from "./shaders/irradiance_gen.fs";
+import {default as prefilterGenFrag} from "./shaders/prefilter_gen.fs";
+import {default as brdfLUTGenVert} from "./shaders/brdf_lut_gen.vs";
+import {default as brdfLUTGenFrag} from "./shaders/brdf_lut_gen.fs";
+import {default as quadFrag} from "./shaders/quad.fs";
 
 type ShaderProgramSource = {
 	vertex: string;
@@ -13,6 +20,11 @@ type ShaderProgramSource = {
 export type Shaders = {
 	diffuse: Shader;
 	skybox: Shader;
+	cubemapGenerator: Shader;
+	irradianceGenerator: Shader;
+	prefilterGenerator: Shader;
+	brdfLUTGenerator: Shader;
+	quad: Shader;
 }
 
 export function loadShaders(gl: WebGL2RenderingContext): Shaders {
@@ -20,18 +32,60 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 		vertex: diffuseVert,
 		fragment: diffuseFrag,
 		attributes: ["vertex_data"],
-		uniforms: ["model_matrix", "normal_matrix", "is_metallic", "roughness"],
+		uniforms: ["model_matrix", "normal_matrix", "is_metallic", "roughness", "ao", "sky_irradiance", "sky_prefilter", "sky_brdf_lut"],
 	});
+	gl.useProgram(diffuse.program);
+	gl.uniform1i(diffuse.uniforms.sky_irradiance, 0);
+	gl.uniform1i(diffuse.uniforms.sky_prefilter, 1);
+	gl.uniform1i(diffuse.uniforms.sky_brdf_lut, 2);
+
 	const skybox = new Shader(gl, {
 		vertex: skyboxVert,
 		fragment: skyboxFrag,
 		attributes: ["vertex_position"],
 		uniforms: ["skybox", "rot_proj_matrix"],
 	});
+	gl.useProgram(skybox.program);
+	gl.uniform1i(skybox.uniforms.skybox, 3);
+
+	const cubemapGenerator = new Shader(gl, {
+		vertex: cubemapGenVert,
+		fragment: cubemapGenFrag,
+		attributes: ["vertex_position"],
+		uniforms: ["rect_texture", "proj_matrix", "view_matrix"],
+	});
+	const irradianceGenerator = new Shader(gl, {
+		vertex: cubemapGenVert,
+		fragment: irradianceGenFrag,
+		attributes: ["vertex_position"],
+		uniforms: ["skybox", "proj_matrix", "view_matrix"],
+	});
+	const prefilterGenerator = new Shader(gl, {
+		vertex: cubemapGenVert,
+		fragment: prefilterGenFrag,
+		attributes: ["vertex_position"],
+		uniforms: ["skybox", "proj_matrix", "view_matrix", "roughness"],
+	});
+	const brdfLUTGenerator = new Shader(gl, {
+		vertex: brdfLUTGenVert,
+		fragment: brdfLUTGenFrag,
+		attributes: ["vertex_position", "tex_coords"],
+	});
+	const quad = new Shader(gl, {
+		vertex: brdfLUTGenVert,
+		fragment: quadFrag,
+		attributes: ["vertex_position", "tex_coords"],
+		uniforms: ["tex"],
+	});
 
 	return {
 		diffuse: diffuse,
 		skybox: skybox,
+		cubemapGenerator: cubemapGenerator,
+		irradianceGenerator: irradianceGenerator,
+		prefilterGenerator: prefilterGenerator,
+		brdfLUTGenerator: brdfLUTGenerator,
+		quad: quad,
 	}
 }
 

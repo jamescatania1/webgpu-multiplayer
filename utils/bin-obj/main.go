@@ -189,7 +189,7 @@ func main() {
 		x := uint16((float64(vertices[i])*scaleFactor + 0.5) * float64(math.MaxUint16))
 		y := uint16((float64(vertices[i+1])*scaleFactor + 0.5) * float64(math.MaxUint16))
 		z := uint16((float64(vertices[i+2])*scaleFactor + 0.5) * float64(math.MaxUint16))
-		var c uint16 = math.MaxUint16
+		var c uint16 = 0
 		if hasColor { // colors are present, pack as rgb-5_6_5
 			c = uint16(colors[i]*31)<<11 | uint16(colors[i+1]*63)<<5 | uint16(colors[i+2]*31)
 		}

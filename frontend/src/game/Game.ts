@@ -11,6 +11,12 @@ export default class Game {
 		if (!gl) {
 			throw new Error("Unable to initialize WebGL. Your browser or machine may not support it.");
 		}
+		if (!gl.getExtension("EXT_color_buffer_float")) {
+			throw new Error("Rendering to floating point textures is not supported on this platform");
+		}
+		if (!gl.getExtension("OES_texture_float_linear")) {
+			throw new Error("Rendering to floating point textures is not supported on this platform");
+		}
 
 		const input = new Input(canvas);
 		const scene = new Scene(gl);

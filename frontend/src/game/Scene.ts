@@ -34,16 +34,17 @@ export default class Scene {
 	constructor(gl: WebGL2RenderingContext) {
 		this.shaders = loadShaders(gl);
 		this.camera = new Camera(gl);
-		this.lighting = new Lighting(gl, this.camera, this.shaders.skybox);
+		this.lighting = new Lighting(gl, this.camera, this.shaders);
 
 		this.camera.position[2] = 5.0;
 
 		this.monke = new Model(gl, "/monke-smooth.bobj", this.shaders.diffuse);
+		this.monke.roughness = 0.5;
 		this.add(this.monke);
-		const terrain = new Model(gl, "/terrain.bobj", this.shaders.diffuse);
-		terrain.transform.position[1] = -5;
-		terrain.transform.update(gl);
-		this.add(terrain);
+		const sphere = new Model(gl, "/sphere.bobj", this.shaders.diffuse);
+		sphere.roughness = 0.05;
+		sphere.isMetal = true;
+		// this.add(sphere);
 
 		gl.enable(gl.CULL_FACE);
 
@@ -101,7 +102,7 @@ export default class Scene {
 		vec3.scaleAndAdd(this.camera.position, this.camera.position, this.vel, 0.01 * deltaTime);
 
 		// clear everything
-		gl.clearColor(0.6, 0.8, 0.92, 1.0);
+		gl.clearColor(0.0, 0.0, 0.0, 1.0);
 		gl.clearDepth(1.0);
 		gl.enable(gl.DEPTH_TEST);
 		gl.depthFunc(gl.LEQUAL);
@@ -117,12 +118,16 @@ export default class Scene {
 		gl.bufferSubData(gl.UNIFORM_BUFFER, 0, this.cameraUboBuffer);
 		gl.bindBuffer(gl.UNIFORM_BUFFER, null);
 
+		if (!this.lighting.loaded) {
+			return;
+		}
+
 		this.monke.transform.position[1] = Math.sin(performance.now() / 200) * 0.1;
 		this.monke.transform.rotation[0] = performance.now() / 100;
 		this.monke.transform.rotation[1] = performance.now() / 100;
 		this.monke.transform.rotation[2] = performance.now() / 100;
 		this.monke.transform.update(gl);
-		
+
 		// draw objects
 		for (const obj of this.objects.values()) {
 			obj.draw && obj.draw(gl, this, this.camera);

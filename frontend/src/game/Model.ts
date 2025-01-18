@@ -214,6 +214,9 @@ export default class Model implements SceneObject {
 	private modelData: ModelData | null = null;
 
 	public transform: Transform;
+	public isMetal = false;
+	public roughness = 0.025;
+	public ao = 1.0;
 
 	constructor(gl: WebGL2RenderingContext, url: string, shader: Shader) {
 		this.transform = new Transform(gl);
@@ -244,9 +247,10 @@ export default class Model implements SceneObject {
 		// uniforms
 		gl.uniformMatrix4fv(this.shader.uniforms.model_matrix, false, this.transform.matrix);
 		gl.uniformMatrix3fv(this.shader.uniforms.normal_matrix, false, this.transform.normalMatrix);
-		gl.uniform1i(this.shader.uniforms.is_metallic, 0);
-		gl.uniform1f(this.shader.uniforms.roughness, 0.05);
-
+		gl.uniform1i(this.shader.uniforms.is_metallic, this.isMetal ? 1 : 0);
+		gl.uniform1f(this.shader.uniforms.roughness, this.roughness);
+		gl.uniform1f(this.shader.uniforms.ao, this.ao);
+		
 		gl.drawElements(gl.TRIANGLES, this.modelData.indexCount, this.modelData.indexType, 0);
 	}
 }
