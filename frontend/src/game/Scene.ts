@@ -5,6 +5,7 @@ import Cube from "./Cube";
 import type Input from "./Input";
 import Model from "./Model";
 import { loadShaders, type Shaders } from "./Shaders";
+import { loadTextures, textures } from "./Resources";
 
 export interface SceneObject {
 	update?(): void;
@@ -23,6 +24,7 @@ export default class Scene {
 	private readonly ubo: WebGLBuffer;
 	private readonly cameraUboBuffer: Float32Array = new Float32Array(20);
 	private objects: SceneObject[] = [];
+	private texturesLoaded = false;
 
 	private readonly input: vec2 = vec2.create();
 	private readonly accel: vec3 = vec3.create();
@@ -35,12 +37,19 @@ export default class Scene {
 		this.shaders = loadShaders(gl);
 		this.camera = new Camera(gl);
 		this.lighting = new Lighting(gl, this.camera, this.shaders);
+		loadTextures(gl)
+			.then((_) => {
+				this.texturesLoaded = true;
+			})
+			.catch((err) => {
+				console.error(err);
+			});
 
 		this.camera.position[2] = 5.0;
 
-		this.monke = new Model(gl, "/test.bobj", this.shaders.diffuse);
+		this.monke = new Model(gl, "/monke-smooth.bobj", textures.monke, this.shaders.diffuse);
 		this.monke.roughness = 0.0;
-		// this.monke.metallic = 1.0;
+		this.monke.metallic = 1.0;
 		this.add(this.monke);
 		// const landscape = new Model(gl, "/landscape.bobj", this.shaders.diffuse);
 		// landscape.roughness = 1.0;
@@ -122,7 +131,7 @@ export default class Scene {
 		gl.bufferSubData(gl.UNIFORM_BUFFER, 0, this.cameraUboBuffer);
 		gl.bindBuffer(gl.UNIFORM_BUFFER, null);
 
-		if (!this.lighting.loaded) {
+		if (!this.lighting.loaded || !this.texturesLoaded) {
 			return;
 		}
 

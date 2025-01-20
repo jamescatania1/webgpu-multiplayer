@@ -80,7 +80,7 @@ export default class Lighting {
 		gl.bindVertexArray(null);
 
 		// load the skybox hdr texture
-		loadHDR("/sky.hdr").then((hdr) => {
+		loadHDR("/sky_indoor.hdr").then((hdr) => {
 			const rectSkyboxTexture = gl.createTexture();
 			gl.bindTexture(gl.TEXTURE_2D, rectSkyboxTexture);
 			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB16F, hdr.width, hdr.height, 0, gl.RGB, gl.HALF_FLOAT, hdr.data);
@@ -319,13 +319,13 @@ export default class Lighting {
 
 			// bind the textures to the correct slots
 			gl.activeTexture(gl.TEXTURE0);
-			gl.bindTexture(gl.TEXTURE_CUBE_MAP, irradianceMap);
-			gl.activeTexture(gl.TEXTURE1);
-			gl.bindTexture(gl.TEXTURE_CUBE_MAP, prefilterMap);
-			gl.activeTexture(gl.TEXTURE2);
-			gl.bindTexture(gl.TEXTURE_2D, brdfLUT);
-			gl.activeTexture(gl.TEXTURE3);
 			gl.bindTexture(gl.TEXTURE_CUBE_MAP, skyboxTexture);
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_CUBE_MAP, irradianceMap);
+			gl.activeTexture(gl.TEXTURE2);
+			gl.bindTexture(gl.TEXTURE_CUBE_MAP, prefilterMap);
+			gl.activeTexture(gl.TEXTURE3);
+			gl.bindTexture(gl.TEXTURE_2D, brdfLUT);
 
 			// reset to the drawing state
 			gl.bindVertexArray(null);

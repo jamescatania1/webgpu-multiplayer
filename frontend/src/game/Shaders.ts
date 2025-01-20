@@ -36,19 +36,27 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 			"sky_irradiance",
 			"sky_prefilter",
 			"sky_brdf_lut",
+			"albedo_map",
+			"normal_map",
+			"metallic_map",
+			"roughness_map",
 			"offset",
 			"scale",
 			"model_matrix",
 			"normal_matrix",
+			"texture_component_flags",
 			"metallic",
 			"roughness",
-			"ao",
 		],
 	});
 	gl.useProgram(diffuse.program);
-	gl.uniform1i(diffuse.uniforms.sky_irradiance, 0);
-	gl.uniform1i(diffuse.uniforms.sky_prefilter, 1);
-	gl.uniform1i(diffuse.uniforms.sky_brdf_lut, 2);
+	gl.uniform1i(diffuse.uniforms.sky_irradiance, 1);
+	gl.uniform1i(diffuse.uniforms.sky_prefilter, 2);
+	gl.uniform1i(diffuse.uniforms.sky_brdf_lut, 3);
+	gl.uniform1i(diffuse.uniforms.albedo_map, 4);
+	gl.uniform1i(diffuse.uniforms.normal_map, 5);
+	gl.uniform1i(diffuse.uniforms.metallic_map, 6);
+	gl.uniform1i(diffuse.uniforms.roughness_map, 7);
 
 	const skybox = new Shader(gl, {
 		vertex: skyboxVert,
@@ -57,7 +65,7 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 		uniforms: ["skybox", "rot_proj_matrix"],
 	});
 	gl.useProgram(skybox.program);
-	gl.uniform1i(skybox.uniforms.skybox, 3);
+	gl.uniform1i(skybox.uniforms.skybox, 0);
 
 	const cubemapGenerator = new Shader(gl, {
 		vertex: cubemapGenVert,

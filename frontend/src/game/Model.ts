@@ -4,6 +4,7 @@ import type Scene from "./Scene";
 import type { SceneObject } from "./Scene";
 import Shader from "./Shaders";
 import Transform from "./Transform";
+import type { TextureResource } from "./Resources";
 
 type ModelData = {
 	vao: WebGLVertexArrayObject;
@@ -32,7 +33,7 @@ enum ModelReadState {
 
 const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Promise<ModelData> => {
 	const startTime = performance.now();
-	const debug = true;
+	const debug = false;
 
 	let readState = ModelReadState.IndexSize;
 
@@ -131,6 +132,7 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 			);
 		}
 		const reader = response.body.getReader();
+		let trailingChunkData: Uint8Array<ArrayBufferLike> | null = null;
 		return readChunk();
 
 		function readChunk() {
@@ -140,6 +142,13 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 		function appendChunks({ done, value }: ReadableStreamReadResult<Uint8Array<ArrayBufferLike>>): any {
 			if (done || !value) {
 				return;
+			}
+			if (trailingChunkData && trailingChunkData.length > 0) {
+				const newChunk = new Uint8Array(trailingChunkData.length + value.byteLength);
+				newChunk.set(trailingChunkData);
+				newChunk.set(value, trailingChunkData.length);
+				value = newChunk;
+				trailingChunkData = null;
 			}
 
 			const chunkSize = value.byteLength;
@@ -257,6 +266,9 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 				}
 			}
 
+			if (readIndex < chunkSize) {
+				trailingChunkData = new Uint8Array(value.buffer.slice(readIndex));
+			}
 			if (debug) console.log("reading next chunk");
 			return readChunk();
 		}
@@ -266,16 +278,18 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 export default class Model implements SceneObject {
 	private shader: Shader;
 	private modelData: ModelData | null = null;
+	private textures: TextureResource;
 
 	public transform: Transform;
 	public metallic = 0.0;
-	public roughness = 0.025;
+	public roughness = 1.0;
 	public ao = 1.0;
 
-	constructor(gl: WebGL2RenderingContext, url: string, shader: Shader) {
+	constructor(gl: WebGL2RenderingContext, url: string, textures: TextureResource, shader: Shader) {
 		this.transform = new Transform(gl);
 		this.transform.update(gl);
 		this.shader = shader;
+		this.textures = textures;
 
 		loadBOBJ(gl, url, this.shader)
 			.then((data) => {
@@ -295,14 +309,38 @@ export default class Model implements SceneObject {
 		// position buffer
 		gl.bindVertexArray(this.modelData.vao);
 		gl.useProgram(this.shader.program);
+		
+		// textures
+		let textureFlags = 0x0;
+		if (this.textures.albedo && gl.isTexture(this.textures.albedo)) {
+			gl.activeTexture(gl.TEXTURE4);
+			gl.bindTexture(gl.TEXTURE_2D, this.textures.albedo);
+			textureFlags |= 0x1;
+		}
+		if (this.textures.normal && gl.isTexture(this.textures.normal)) {
+			gl.activeTexture(gl.TEXTURE5);
+			gl.bindTexture(gl.TEXTURE_2D, this.textures.normal);
+			textureFlags |= 0x2;
+		}
+		if (this.textures.metallic && gl.isTexture(this.textures.metallic)) {
+			gl.activeTexture(gl.TEXTURE6);
+			gl.bindTexture(gl.TEXTURE_2D, this.textures.metallic);
+			textureFlags |= 0x4;
+		}
+		if (this.textures.roughness && gl.isTexture(this.textures.roughness)) {
+			gl.activeTexture(gl.TEXTURE7);
+			gl.bindTexture(gl.TEXTURE_2D, this.textures.roughness);
+			textureFlags |= 0x8;
+		}
+
 		// uniforms
 		gl.uniform3fv(this.shader.uniforms.offset, this.modelData.offset);
 		gl.uniform1f(this.shader.uniforms.scale, 1.0 / this.modelData.scale);
 		gl.uniformMatrix4fv(this.shader.uniforms.model_matrix, false, this.transform.matrix);
 		gl.uniformMatrix3fv(this.shader.uniforms.normal_matrix, false, this.transform.normalMatrix);
+		gl.uniform1ui(this.shader.uniforms.texture_component_flags, textureFlags);
 		gl.uniform1f(this.shader.uniforms.metallic, this.metallic);
 		gl.uniform1f(this.shader.uniforms.roughness, this.roughness);
-		gl.uniform1f(this.shader.uniforms.ao, this.ao);
 
 		gl.drawElements(gl.TRIANGLES, this.modelData.indexCount, this.modelData.indexType, 0);
 	}
