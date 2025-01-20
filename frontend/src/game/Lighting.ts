@@ -11,6 +11,12 @@ export type PointLight = {
 	intensity: number;
 };
 
+const SKYBOX_RESOLUTION = 1024;
+const IRRADIANCE_RESOLUTION = 64;
+const PREFILTER_RESOLUTION = 256;
+const PREFILTER_MIP_LEVELS = 5;
+const BRDF_LUT_RESOLUTION = 512;
+
 export default class Lighting {
 	public readonly sunColor = vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0);
 	public readonly sunDirection = vec3.create();
@@ -20,7 +26,7 @@ export default class Lighting {
 	private readonly maxLights = 4;
 	private readonly uboBuffer = new Float32Array(40);
 	private readonly sunPosition = vec3.fromValues(20, 50, 17);
-	private readonly sunIntensity = 1.0;
+	public readonly sunIntensity = 1.0;
 
 	private readonly skyboxShader: Shader;
 	private readonly skyboxVAO: WebGLVertexArrayObject;
@@ -35,12 +41,12 @@ export default class Lighting {
 			{
 				position: vec3.fromValues(1, 6, 3),
 				color: vec3.fromValues(1, 0, 1),
-				intensity: 1.0,
+				intensity: 3.0,
 			},
 			{
 				position: vec3.fromValues(-1, 2, -2),
 				color: vec3.fromValues(0, 1, 1),
-				intensity: 4.0,
+				intensity: 1.0,
 			},
 		];
 
@@ -118,7 +124,7 @@ export default class Lighting {
 			gl.bindFramebuffer(gl.FRAMEBUFFER, cubemapFBO);
 			const cubemapRBO = gl.createRenderbuffer();
 			gl.bindRenderbuffer(gl.RENDERBUFFER, cubemapRBO);
-			gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, 512, 512);
+			gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, SKYBOX_RESOLUTION, SKYBOX_RESOLUTION);
 			gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, cubemapRBO);
 
 			// create the cubemap texture to generate
@@ -129,8 +135,8 @@ export default class Lighting {
 					gl.TEXTURE_CUBE_MAP_POSITIVE_X + i,
 					0,
 					gl.RGBA,
-					512,
-					512,
+					SKYBOX_RESOLUTION,
+					SKYBOX_RESOLUTION,
 					0,
 					gl.RGBA,
 					gl.UNSIGNED_BYTE,
@@ -158,7 +164,7 @@ export default class Lighting {
 			gl.activeTexture(gl.TEXTURE0);
 			gl.bindTexture(gl.TEXTURE_2D, rectSkyboxTexture);
 
-			gl.viewport(0, 0, 512, 512);
+			gl.viewport(0, 0, SKYBOX_RESOLUTION, SKYBOX_RESOLUTION);
 			gl.bindFramebuffer(gl.FRAMEBUFFER, cubemapFBO);
 			gl.bindVertexArray(cubemapGeneratorVAO);
 			gl.disable(gl.CULL_FACE);
@@ -186,8 +192,8 @@ export default class Lighting {
 					gl.TEXTURE_CUBE_MAP_POSITIVE_X + i,
 					0,
 					gl.RGBA16F,
-					128,
-					128,
+					IRRADIANCE_RESOLUTION,
+					IRRADIANCE_RESOLUTION,
 					0,
 					gl.RGBA,
 					gl.HALF_FLOAT,
@@ -202,7 +208,7 @@ export default class Lighting {
 
 			gl.bindFramebuffer(gl.FRAMEBUFFER, cubemapFBO);
 			gl.bindRenderbuffer(gl.RENDERBUFFER, cubemapRBO);
-			gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, 128, 128);
+			gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, IRRADIANCE_RESOLUTION, IRRADIANCE_RESOLUTION);
 
 			gl.useProgram(shaders.irradianceGenerator.program);
 			gl.uniform1i(shaders.irradianceGenerator.uniforms.skybox, 0);
@@ -210,7 +216,7 @@ export default class Lighting {
 			gl.activeTexture(gl.TEXTURE0);
 			gl.bindTexture(gl.TEXTURE_CUBE_MAP, skyboxTexture);
 
-			gl.viewport(0, 0, 128, 128);
+			gl.viewport(0, 0, IRRADIANCE_RESOLUTION, IRRADIANCE_RESOLUTION);
 			gl.bindVertexArray(cubemapGeneratorVAO);
 			gl.bindFramebuffer(gl.FRAMEBUFFER, cubemapFBO);
 			for (let i = 0; i < 6; i++) {
@@ -235,8 +241,8 @@ export default class Lighting {
 					gl.TEXTURE_CUBE_MAP_POSITIVE_X + i,
 					0,
 					gl.RGBA16F,
-					128,
-					128,
+					PREFILTER_RESOLUTION,
+					PREFILTER_RESOLUTION,
 					0,
 					gl.RGBA,
 					gl.HALF_FLOAT,
@@ -257,13 +263,12 @@ export default class Lighting {
 			gl.bindTexture(gl.TEXTURE_CUBE_MAP, skyboxTexture);
 
 			gl.bindFramebuffer(gl.FRAMEBUFFER, cubemapFBO);
-			let mipSize = 128;
-			const mipLevels = 5;
-			for (let i = 0; i < mipLevels; i++) {
+			let mipSize = PREFILTER_RESOLUTION;
+			for (let i = 0; i < PREFILTER_MIP_LEVELS; i++) {
 				gl.bindRenderbuffer(gl.RENDERBUFFER, cubemapRBO);
 				gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, mipSize, mipSize);
 				gl.viewport(0, 0, mipSize, mipSize);
-				const roughness = i / (mipLevels - 1);
+				const roughness = i / (PREFILTER_MIP_LEVELS - 1);
 				gl.uniform1f(shaders.prefilterGenerator.uniforms.roughness, roughness);
 				for (let j = 0; j < 6; j++) {
 					gl.framebufferTexture2D(
@@ -296,7 +301,7 @@ export default class Lighting {
 			// create the brdf LUT
 			const brdfLUT = gl.createTexture();
 			gl.bindTexture(gl.TEXTURE_2D, brdfLUT);
-			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG16F, 512, 512, 0, gl.RG, gl.HALF_FLOAT, null);
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG16F, BRDF_LUT_RESOLUTION, BRDF_LUT_RESOLUTION, 0, gl.RG, gl.HALF_FLOAT, null);
 			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -305,8 +310,8 @@ export default class Lighting {
 			gl.bindFramebuffer(gl.FRAMEBUFFER, cubemapFBO);
 			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, brdfLUT, 0);
 			gl.bindRenderbuffer(gl.RENDERBUFFER, cubemapRBO);
-			gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, 512, 512);
-			gl.viewport(0, 0, 512, 512);
+			gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, BRDF_LUT_RESOLUTION, BRDF_LUT_RESOLUTION);
+			gl.viewport(0, 0, BRDF_LUT_RESOLUTION, BRDF_LUT_RESOLUTION);
 			gl.useProgram(shaders.brdfLUTGenerator.program);
 			gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 			gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -352,6 +357,7 @@ export default class Lighting {
 			const light = this.pointLights[i];
 			this.uboBuffer.set(light.position, 8 + i * 4);
 			this.uboBuffer.set(light.color, 8 + (this.maxLights + i) * 4);
+			this.uboBuffer[11 + (this.maxLights + i) * 4] = light.intensity;
 		}
 		gl.bindBuffer(gl.UNIFORM_BUFFER, ubo);
 		gl.bufferSubData(gl.UNIFORM_BUFFER, 80, this.uboBuffer);

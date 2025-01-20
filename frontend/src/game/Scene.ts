@@ -38,12 +38,16 @@ export default class Scene {
 
 		this.camera.position[2] = 5.0;
 
-		this.monke = new Model(gl, "/monke-smooth.bobj", this.shaders.diffuse);
-		this.monke.roughness = 0.5;
+		this.monke = new Model(gl, "/test.bobj", this.shaders.diffuse);
+		this.monke.roughness = 0.0;
+		// this.monke.metallic = 1.0;
 		this.add(this.monke);
-		const sphere = new Model(gl, "/sphere.bobj", this.shaders.diffuse);
-		sphere.roughness = 0.05;
-		sphere.isMetal = true;
+		// const landscape = new Model(gl, "/landscape.bobj", this.shaders.diffuse);
+		// landscape.roughness = 1.0;
+		// this.add(landscape);
+		// const sphere = new Model(gl, "/sphere.bobj", this.shaders.diffuse);
+		// sphere.roughness = 0.05;
+		// sphere.metallic = 1.0;
 		// this.add(sphere);
 
 		gl.enable(gl.CULL_FACE);
@@ -122,7 +126,7 @@ export default class Scene {
 			return;
 		}
 
-		this.monke.transform.position[1] = Math.sin(performance.now() / 200) * 0.1;
+		this.monke.transform.position[1] = Math.sin(performance.now() / 200) * 0.1 + 1.0;
 		this.monke.transform.rotation[0] = performance.now() / 100;
 		this.monke.transform.rotation[1] = performance.now() / 100;
 		this.monke.transform.rotation[2] = performance.now() / 100;

@@ -7,16 +7,22 @@ import Transform from "./Transform";
 
 type ModelData = {
 	vao: WebGLVertexArrayObject;
-	indexCount: number;
+	vertexCount: number;
 	indexType: GLenum;
-	scaleFactor: number;
+	indexCount: number;
+	triangleCount: number;
+	scale: number;
+	offset: vec3;
 	hasColor: boolean;
+	hasUV: boolean;
+	hasNormal: boolean;
 };
 
 enum ModelReadState {
 	IndexSize,
-	HasColor,
+	VertexComponents,
 	ScaleFactor,
+	ModelOffset,
 	VertexCount,
 	IndexCount,
 	VertexData,
@@ -26,20 +32,25 @@ enum ModelReadState {
 
 const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Promise<ModelData> => {
 	const startTime = performance.now();
-	const debug = false;
+	const debug = true;
 
 	let readState = ModelReadState.IndexSize;
 
 	let indexSize: number;
 	let hasColor: boolean;
-	let scaleFactor = 1.0;
+	let hasUV: boolean;
+	let hasNormal: boolean;
+	let scale = 1.0;
+	let offset = vec3.create();
 
-	let vertices: Uint32Array;
 	let vertexCount: number;
-	let verticesWriteIndex = 0;
-
-	let indices: any;
+	let vertexBufferSize: number;
+	let vertices: Uint32Array;
+	let vertexWriteIndex = 0;
+	
+	let triangleCount: number;
 	let indexCount: number;
+	let indices: any;
 	let indicesWriteIndex = 0;
 
 	return new Promise((resolve, reject) => {
@@ -64,8 +75,25 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 					const vertexBuffer = gl.createBuffer();
 					gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
 					gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-					gl.vertexAttribIPointer(shader.attributes.vertex_data, 3, gl.UNSIGNED_INT, 0, 0);
-					gl.enableVertexAttribArray(shader.attributes.vertex_data);
+
+					let stride = hasUV && hasNormal ? 16 : hasUV || hasNormal ? 12 : 8;
+
+					gl.vertexAttribIPointer(shader.attributes.vertex_xyzc, 2, gl.UNSIGNED_INT, stride, 0);
+					gl.enableVertexAttribArray(shader.attributes.vertex_xyzc);
+
+					if (hasNormal) {
+						gl.vertexAttribIPointer(shader.attributes.vertex_normal, 1, gl.UNSIGNED_INT, stride, 8);
+						gl.enableVertexAttribArray(shader.attributes.vertex_normal);
+					} else {
+						gl.disableVertexAttribArray(shader.attributes.vertex_normal);
+					}
+					if (hasUV) {
+						const offset = hasNormal ? 12 : 8;
+						gl.vertexAttribIPointer(shader.attributes.vertex_uv, 1, gl.UNSIGNED_INT, stride, offset);
+						gl.enableVertexAttribArray(shader.attributes.vertex_uv);
+					} else {
+						gl.disableVertexAttribArray(shader.attributes.vertex_uv);
+					}
 
 					// index buffer
 					const indexBuffer = gl.createBuffer();
@@ -76,11 +104,16 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 
 					resolve({
 						vao: vao,
+						vertexCount: vertexCount,
+						triangleCount: triangleCount,
 						indexCount: indexCount,
 						indexType:
 							indexSize === 1 ? gl.UNSIGNED_BYTE : indexSize === 2 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
-						scaleFactor: scaleFactor,
+						scale: scale,
+						offset: offset,
 						hasColor: hasColor,
+						hasUV: hasUV,
+						hasNormal: hasNormal,
 					});
 				})
 				.catch((err) => {
@@ -113,38 +146,59 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 			const view = new DataView(value.buffer);
 			let readIndex = 0;
 			if (readState === ModelReadState.IndexSize && chunkSize >= 1) {
-				readState = ModelReadState.HasColor;
+				readState = ModelReadState.VertexComponents;
 
 				indexSize = view.getUint8(0);
 				if (debug) console.log("index size:", indexSize);
 				readIndex += 1;
 			}
-			if (readState === ModelReadState.HasColor && chunkSize >= 1) {
+			if (readState === ModelReadState.VertexComponents && chunkSize >= 1) {
 				readState = ModelReadState.ScaleFactor;
 
-				hasColor = view.getUint8(0) === 1;
-				if (debug) console.log("has color:", hasColor);
+				const componentMask = view.getUint8(readIndex);
+				hasColor = (componentMask & 0x4) !== 0;
+				hasNormal = (componentMask & 0x2) !== 0;
+				hasUV = (componentMask & 0x1) !== 0;
+				if (debug) {
+					console.log("has color:", hasColor);
+					console.log("has normal:", hasNormal);
+					console.log("has uv:", hasUV);
+				}
 				readIndex += 1;
 			}
 			if (readState === ModelReadState.ScaleFactor && chunkSize - readIndex >= 8) {
+				readState = ModelReadState.ModelOffset;
+
+				scale = view.getFloat64(readIndex, true);
+				if (debug) console.log("scale factor:", scale);
+				readIndex += 8;
+			}
+			if (readState === ModelReadState.ModelOffset && chunkSize - readIndex >= 12) {
 				readState = ModelReadState.VertexCount;
 
-				scaleFactor = view.getFloat64(readIndex, true);
-				if (debug) console.log("scale factor:", scaleFactor);
-				readIndex += 8;
+				offset[0] = view.getFloat32(readIndex, true);
+				offset[1] = view.getFloat32(readIndex + 4, true);
+				offset[2] = view.getFloat32(readIndex + 8, true);
+				if (debug) console.log("model offset:", vec3.str(offset));
+				readIndex += 12;
 			}
 			if (readState === ModelReadState.VertexCount && chunkSize - readIndex >= 4) {
 				readState = ModelReadState.IndexCount;
 
-				vertexCount = view.getUint32(readIndex, true);
-				vertices = new Uint32Array(vertexCount);
-				if (debug) console.log("vertex count (packed):", vertexCount);
+				vertexBufferSize = view.getUint32(readIndex, true);
+				vertexCount = vertexBufferSize / (hasUV && hasNormal ? 4 : hasUV || hasNormal ? 3 : 2);
+				vertices = new Uint32Array(vertexBufferSize);
+				if (debug) {
+					console.log("vertex buffer size (bytes):", vertexBufferSize * 4);
+					console.log("vertex count:", vertexCount);
+				}
 				readIndex += 4;
 			}
 			if (readState === ModelReadState.IndexCount && chunkSize - readIndex >= 4) {
 				readState = ModelReadState.VertexData;
 
 				indexCount = view.getUint32(readIndex, true);
+				triangleCount = indexCount / 3;
 				switch (indexSize) {
 					case 1:
 						indices = new Uint8Array(indexCount);
@@ -156,11 +210,11 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 						indices = new Uint32Array(indexCount);
 						break;
 				}
-				if (debug) console.log("index count:", indexCount);
+				if (debug) console.log("triangle count:", triangleCount);
 				readIndex += 4;
 			}
 			while (readState === ModelReadState.VertexData && chunkSize - readIndex >= 4) {
-				if (verticesWriteIndex >= vertexCount) {
+				if (vertexWriteIndex >= vertexBufferSize) {
 					readState = ModelReadState.IndexData;
 					if (debug) {
 						console.log("done reading vertices");
@@ -169,8 +223,8 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 					break;
 				}
 				const vertex = view.getUint32(readIndex, true);
-				vertices[verticesWriteIndex] = vertex;
-				verticesWriteIndex += 1;
+				vertices[vertexWriteIndex] = vertex;
+				vertexWriteIndex += 1;
 				readIndex += 4;
 			}
 			while (
@@ -214,7 +268,7 @@ export default class Model implements SceneObject {
 	private modelData: ModelData | null = null;
 
 	public transform: Transform;
-	public isMetal = false;
+	public metallic = 0.0;
 	public roughness = 0.025;
 	public ao = 1.0;
 
@@ -226,8 +280,6 @@ export default class Model implements SceneObject {
 		loadBOBJ(gl, url, this.shader)
 			.then((data) => {
 				this.modelData = data;
-				// vec3.scale(this.transform.scale, this.transform.scale, 1.0 / data.scaleFactor);
-				this.transform.modelScale = 1.0 / data.scaleFactor;
 				this.transform.update(gl);
 			})
 			.catch((err) => {
@@ -239,18 +291,19 @@ export default class Model implements SceneObject {
 		if (!this.modelData) {
 			return;
 		}
-		
+
 		// position buffer
 		gl.bindVertexArray(this.modelData.vao);
 		gl.useProgram(this.shader.program);
-
 		// uniforms
+		gl.uniform3fv(this.shader.uniforms.offset, this.modelData.offset);
+		gl.uniform1f(this.shader.uniforms.scale, 1.0 / this.modelData.scale);
 		gl.uniformMatrix4fv(this.shader.uniforms.model_matrix, false, this.transform.matrix);
 		gl.uniformMatrix3fv(this.shader.uniforms.normal_matrix, false, this.transform.normalMatrix);
-		gl.uniform1i(this.shader.uniforms.is_metallic, this.isMetal ? 1 : 0);
+		gl.uniform1f(this.shader.uniforms.metallic, this.metallic);
 		gl.uniform1f(this.shader.uniforms.roughness, this.roughness);
 		gl.uniform1f(this.shader.uniforms.ao, this.ao);
-		
+
 		gl.drawElements(gl.TRIANGLES, this.modelData.indexCount, this.modelData.indexType, 0);
 	}
 }

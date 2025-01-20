@@ -1,14 +1,14 @@
-import {default as diffuseVert} from "./shaders/diffuse.vs";
-import {default as diffuseFrag} from "./shaders/diffuse.fs";
-import {default as skyboxVert} from "./shaders/skybox.vs";
-import {default as skyboxFrag} from "./shaders/skybox.fs";
-import {default as cubemapGenVert} from "./shaders/cubemap_gen.vs";
-import {default as cubemapGenFrag} from "./shaders/cubemap_gen.fs";
-import {default as irradianceGenFrag} from "./shaders/irradiance_gen.fs";
-import {default as prefilterGenFrag} from "./shaders/prefilter_gen.fs";
-import {default as brdfLUTGenVert} from "./shaders/brdf_lut_gen.vs";
-import {default as brdfLUTGenFrag} from "./shaders/brdf_lut_gen.fs";
-import {default as quadFrag} from "./shaders/quad.fs";
+import { default as diffuseVert } from "./shaders/diffuse.vs";
+import { default as diffuseFrag } from "./shaders/diffuse.fs";
+import { default as skyboxVert } from "./shaders/skybox.vs";
+import { default as skyboxFrag } from "./shaders/skybox.fs";
+import { default as cubemapGenVert } from "./shaders/cubemap_gen.vs";
+import { default as cubemapGenFrag } from "./shaders/cubemap_gen.fs";
+import { default as irradianceGenFrag } from "./shaders/irradiance_gen.fs";
+import { default as prefilterGenFrag } from "./shaders/prefilter_gen.fs";
+import { default as brdfLUTGenVert } from "./shaders/brdf_lut_gen.vs";
+import { default as brdfLUTGenFrag } from "./shaders/brdf_lut_gen.fs";
+import { default as quadFrag } from "./shaders/quad.fs";
 
 type ShaderProgramSource = {
 	vertex: string;
@@ -25,14 +25,25 @@ export type Shaders = {
 	prefilterGenerator: Shader;
 	brdfLUTGenerator: Shader;
 	quad: Shader;
-}
+};
 
 export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 	const diffuse = new Shader(gl, {
 		vertex: diffuseVert,
 		fragment: diffuseFrag,
-		attributes: ["vertex_data"],
-		uniforms: ["model_matrix", "normal_matrix", "is_metallic", "roughness", "ao", "sky_irradiance", "sky_prefilter", "sky_brdf_lut"],
+		attributes: ["vertex_xyzc", "vertex_normal", "vertex_uv"],
+		uniforms: [
+			"sky_irradiance",
+			"sky_prefilter",
+			"sky_brdf_lut",
+			"offset",
+			"scale",
+			"model_matrix",
+			"normal_matrix",
+			"metallic",
+			"roughness",
+			"ao",
+		],
 	});
 	gl.useProgram(diffuse.program);
 	gl.uniform1i(diffuse.uniforms.sky_irradiance, 0);
@@ -86,7 +97,7 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 		prefilterGenerator: prefilterGenerator,
 		brdfLUTGenerator: brdfLUTGenerator,
 		quad: quad,
-	}
+	};
 }
 
 export default class Shader {
@@ -112,7 +123,7 @@ export default class Shader {
 		if (uniformBlockIndex !== gl.INVALID_INDEX) {
 			gl.uniformBlockBinding(program, uniformBlockIndex, 0);
 		}
-		
+
 		for (const attribute of source.attributes || []) {
 			this.attributes[attribute] = gl.getAttribLocation(program, attribute);
 		}
