@@ -6,9 +6,12 @@ import { default as cubemapGenVert } from "./shaders/cubemap_gen.vs";
 import { default as cubemapGenFrag } from "./shaders/cubemap_gen.fs";
 import { default as irradianceGenFrag } from "./shaders/irradiance_gen.fs";
 import { default as prefilterGenFrag } from "./shaders/prefilter_gen.fs";
-import { default as brdfLUTGenVert } from "./shaders/brdf_lut_gen.vs";
-import { default as brdfLUTGenFrag } from "./shaders/brdf_lut_gen.fs";
+import { default as quadVert } from "./shaders/quad.vs";
 import { default as quadFrag } from "./shaders/quad.fs";
+import { default as brdfLUTGenFrag } from "./shaders/brdf_lut_gen.fs";
+import { default as postFXFrag } from "./shaders/postfx.fs";
+import { default as depthVert } from "./shaders/depth.vs";
+import { default as depthFrag } from "./shaders/depth.fs";
 
 type ShaderProgramSource = {
 	vertex: string;
@@ -19,12 +22,14 @@ type ShaderProgramSource = {
 
 export type Shaders = {
 	diffuse: Shader;
+	depth: Shader;
 	skybox: Shader;
 	cubemapGenerator: Shader;
 	irradianceGenerator: Shader;
 	prefilterGenerator: Shader;
 	brdfLUTGenerator: Shader;
 	quad: Shader;
+	postFX: Shader;
 };
 
 export function loadShaders(gl: WebGL2RenderingContext): Shaders {
@@ -58,6 +63,15 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 	gl.uniform1i(diffuse.uniforms.metallic_map, 6);
 	gl.uniform1i(diffuse.uniforms.roughness_map, 7);
 
+	const depth = new Shader(gl, {
+		vertex: depthVert,
+		fragment: depthFrag,
+		attributes: ["vertex_xyzc"],
+		uniforms: [
+			"model_matrix", "offset", "scale",
+		],
+	});
+
 	const skybox = new Shader(gl, {
 		vertex: skyboxVert,
 		fragment: skyboxFrag,
@@ -86,25 +100,35 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 		uniforms: ["skybox", "proj_matrix", "view_matrix", "roughness"],
 	});
 	const brdfLUTGenerator = new Shader(gl, {
-		vertex: brdfLUTGenVert,
+		vertex: quadVert,
 		fragment: brdfLUTGenFrag,
 		attributes: ["vertex_position", "tex_coords"],
 	});
 	const quad = new Shader(gl, {
-		vertex: brdfLUTGenVert,
+		vertex: quadVert,
 		fragment: quadFrag,
 		attributes: ["vertex_position", "tex_coords"],
 		uniforms: ["tex"],
 	});
+	const postFX = new Shader(gl, {
+		vertex: quadVert,
+		fragment: postFXFrag,
+		attributes: ["vertex_position", "tex_coords"],
+		uniforms: ["color_map"],
+	});
+	gl.useProgram(postFX.program);
+	gl.uniform1i(postFX.uniforms.color_map, 8);
 
 	return {
 		diffuse: diffuse,
+		depth: depth,
 		skybox: skybox,
 		cubemapGenerator: cubemapGenerator,
 		irradianceGenerator: irradianceGenerator,
 		prefilterGenerator: prefilterGenerator,
 		brdfLUTGenerator: brdfLUTGenerator,
 		quad: quad,
+		postFX: postFX,
 	};
 }
 

@@ -164,7 +164,5 @@ void main() {
     light += ambient + vec3(uv.x) * 0.0001;
 
     // gamma correct
-    light = light / (light + vec3(1.0));
-    light = pow(light, vec3(1.0 / 2.2));
-    out_color = vec4(light, 1.0);
+    out_color = vec4(light, 1.0); 
 }

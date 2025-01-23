@@ -8,6 +8,7 @@ import type { TextureResource } from "./Resources";
 
 type ModelData = {
 	vao: WebGLVertexArrayObject;
+	depthVAO: WebGLVertexArrayObject;
 	vertexCount: number;
 	indexType: GLenum;
 	indexCount: number;
@@ -31,7 +32,7 @@ enum ModelReadState {
 	Done,
 }
 
-const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Promise<ModelData> => {
+const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader, depthShader: Shader): Promise<ModelData> => {
 	const startTime = performance.now();
 	const debug = false;
 
@@ -48,7 +49,7 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 	let vertexBufferSize: number;
 	let vertices: Uint32Array;
 	let vertexWriteIndex = 0;
-	
+
 	let triangleCount: number;
 	let indexCount: number;
 	let indices: any;
@@ -100,8 +101,19 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 					const indexBuffer = gl.createBuffer();
 					gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
 					gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-
 					gl.bindVertexArray(null);
+				
+
+					// depth vao
+					const depthVAO = gl.createVertexArray();
+					gl.bindVertexArray(depthVAO);
+					const depthVertexBuffer = gl.createBuffer();
+					gl.bindBuffer(gl.ARRAY_BUFFER, depthVertexBuffer);
+					gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+					gl.vertexAttribIPointer(depthShader.attributes.vertex_xyzc, 2, gl.UNSIGNED_INT, stride, 0);
+					gl.enableVertexAttribArray(depthShader.attributes.vertex_xyzc);
+					gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+					gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
 					resolve({
 						vao: vao,
@@ -115,6 +127,7 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 						hasColor: hasColor,
 						hasUV: hasUV,
 						hasNormal: hasNormal,
+						depthVAO: depthVAO,
 					});
 				})
 				.catch((err) => {
@@ -277,6 +290,7 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader): Prom
 
 export default class Model implements SceneObject {
 	private shader: Shader;
+	private depthShader: Shader;
 	private modelData: ModelData | null = null;
 	private textures: TextureResource;
 
@@ -285,13 +299,14 @@ export default class Model implements SceneObject {
 	public roughness = 1.0;
 	public ao = 1.0;
 
-	constructor(gl: WebGL2RenderingContext, url: string, textures: TextureResource, shader: Shader) {
+	constructor(gl: WebGL2RenderingContext, url: string, textures: TextureResource, shader: Shader, depthShader: Shader) {
 		this.transform = new Transform(gl);
 		this.transform.update(gl);
 		this.shader = shader;
+		this.depthShader = depthShader;
 		this.textures = textures;
 
-		loadBOBJ(gl, url, this.shader)
+		loadBOBJ(gl, url, shader, depthShader)
 			.then((data) => {
 				this.modelData = data;
 				this.transform.update(gl);
@@ -301,46 +316,55 @@ export default class Model implements SceneObject {
 			});
 	}
 
-	public draw(gl: WebGL2RenderingContext, scene: Scene, camera: Camera) {
+	public draw(gl: WebGL2RenderingContext, scene: Scene, camera: Camera, depthOnly: boolean) {
 		if (!this.modelData) {
 			return;
 		}
-
-		// position buffer
-		gl.bindVertexArray(this.modelData.vao);
-		gl.useProgram(this.shader.program);
 		
-		// textures
-		let textureFlags = 0x0;
-		if (this.textures.albedo && gl.isTexture(this.textures.albedo)) {
-			gl.activeTexture(gl.TEXTURE4);
-			gl.bindTexture(gl.TEXTURE_2D, this.textures.albedo);
-			textureFlags |= 0x1;
-		}
-		if (this.textures.normal && gl.isTexture(this.textures.normal)) {
-			gl.activeTexture(gl.TEXTURE5);
-			gl.bindTexture(gl.TEXTURE_2D, this.textures.normal);
-			textureFlags |= 0x2;
-		}
-		if (this.textures.metallic && gl.isTexture(this.textures.metallic)) {
-			gl.activeTexture(gl.TEXTURE6);
-			gl.bindTexture(gl.TEXTURE_2D, this.textures.metallic);
-			textureFlags |= 0x4;
-		}
-		if (this.textures.roughness && gl.isTexture(this.textures.roughness)) {
-			gl.activeTexture(gl.TEXTURE7);
-			gl.bindTexture(gl.TEXTURE_2D, this.textures.roughness);
-			textureFlags |= 0x8;
-		}
+		if (depthOnly) {
+			gl.bindVertexArray(this.modelData.depthVAO);
+			gl.useProgram(this.depthShader.program);
 
-		// uniforms
-		gl.uniform3fv(this.shader.uniforms.offset, this.modelData.offset);
-		gl.uniform1f(this.shader.uniforms.scale, 1.0 / this.modelData.scale);
-		gl.uniformMatrix4fv(this.shader.uniforms.model_matrix, false, this.transform.matrix);
-		gl.uniformMatrix3fv(this.shader.uniforms.normal_matrix, false, this.transform.normalMatrix);
-		gl.uniform1ui(this.shader.uniforms.texture_component_flags, textureFlags);
-		gl.uniform1f(this.shader.uniforms.metallic, this.metallic);
-		gl.uniform1f(this.shader.uniforms.roughness, this.roughness);
+			gl.uniform3fv(this.depthShader.uniforms.offset, this.modelData.offset);
+			gl.uniform1f(this.depthShader.uniforms.scale, 1.0 / this.modelData.scale);
+			gl.uniformMatrix4fv(this.depthShader.uniforms.model_matrix, false, this.transform.matrix);
+		}
+		else {
+			gl.bindVertexArray(this.modelData.vao);
+			gl.useProgram(this.shader.program);
+
+			// textures
+			let textureFlags = 0x0;
+			if (this.textures.albedo && gl.isTexture(this.textures.albedo)) {
+				gl.activeTexture(gl.TEXTURE4);
+				gl.bindTexture(gl.TEXTURE_2D, this.textures.albedo);
+				textureFlags |= 0x1;
+			}
+			if (this.textures.normal && gl.isTexture(this.textures.normal)) {
+				gl.activeTexture(gl.TEXTURE5);
+				gl.bindTexture(gl.TEXTURE_2D, this.textures.normal);
+				textureFlags |= 0x2;
+			}
+			if (this.textures.metallic && gl.isTexture(this.textures.metallic)) {
+				gl.activeTexture(gl.TEXTURE6);
+				gl.bindTexture(gl.TEXTURE_2D, this.textures.metallic);
+				textureFlags |= 0x4;
+			}
+			if (this.textures.roughness && gl.isTexture(this.textures.roughness)) {
+				gl.activeTexture(gl.TEXTURE7);
+				gl.bindTexture(gl.TEXTURE_2D, this.textures.roughness);
+				textureFlags |= 0x8;
+			}
+
+			// uniforms
+			gl.uniform3fv(this.shader.uniforms.offset, this.modelData.offset);
+			gl.uniform1f(this.shader.uniforms.scale, 1.0 / this.modelData.scale);
+			gl.uniformMatrix4fv(this.shader.uniforms.model_matrix, false, this.transform.matrix);
+			gl.uniformMatrix3fv(this.shader.uniforms.normal_matrix, false, this.transform.normalMatrix);
+			gl.uniform1ui(this.shader.uniforms.texture_component_flags, textureFlags);
+			gl.uniform1f(this.shader.uniforms.metallic, this.metallic);
+			gl.uniform1f(this.shader.uniforms.roughness, this.roughness);
+		}
 
 		gl.drawElements(gl.TRIANGLES, this.modelData.indexCount, this.modelData.indexType, 0);
 	}

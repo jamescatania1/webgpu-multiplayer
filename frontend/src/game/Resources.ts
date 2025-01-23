@@ -1,22 +1,34 @@
 export type TextureMap = "albedo" | "normal" | "metallic" | "roughness";
 
 export type TextureResource = {
-    albedo?: WebGLTexture;
-    normal?: WebGLTexture;
-    metallic?: WebGLTexture;
-    roughness?: WebGLTexture;
+	albedo?: WebGLTexture;
+	normal?: WebGLTexture;
+	metallic?: WebGLTexture;
+	roughness?: WebGLTexture;
 };
 
 const textureData = {
 	monke: {
 		baseURL: "/monke-smooth",
-		maps: ["albedo", "normal"],
+		maps: ["albedo", "normal", "metallic", "roughness"],
 		extension: "webp",
 	},
+    base: {
+        baseURL: "/base",
+        maps: ["albedo", "normal", "metallic", "roughness"],
+        extension: "webp",
+    },
+    empty: {
+        baseURL: "/",
+        maps: [],
+        extension: "webp",
+    }
 };
 
-export const textures: { [key: string]: TextureResource} = {
+export const textures: { [key: string]: TextureResource } = {
 	monke: {},
+    base: {},
+    empty: {},
 };
 
 export const loadTextures = (gl: WebGL2RenderingContext): Promise<void> => {
@@ -28,31 +40,33 @@ export const loadTextures = (gl: WebGL2RenderingContext): Promise<void> => {
 					new Promise<[string, TextureMap, WebGLTexture]>((resolve, reject) => {
 						const texture = gl.createTexture();
 						gl.bindTexture(gl.TEXTURE_2D, texture);
-						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
 						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
 						const image = new Image();
 						image.src = `${resource.baseURL}_${map}.${resource.extension}`;
 						image.onload = () => {
-                            gl.activeTexture(gl.TEXTURE0);
+							gl.activeTexture(gl.TEXTURE0);
 							gl.bindTexture(gl.TEXTURE_2D, texture);
-                            switch (map) {
-                                case "albedo":
-                                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-                                    break;
-                                case "normal":
-                                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
-                                    break;
-                                case "metallic":
-                                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RED, gl.RED, gl.UNSIGNED_BYTE, image);
-                                    break;
-                                case "roughness":
-                                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RED, gl.RED, gl.UNSIGNED_BYTE, image);
-                                    break;
-                            }
+							gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+							switch (map) {
+								case "albedo":
+									gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+									break;
+								case "normal":
+									gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
+									break;
+								case "metallic":
+									gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, image);
+									break;
+								case "roughness":
+									gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, image);
+									break;
+							}
 							gl.bindTexture(gl.TEXTURE_2D, null);
+							gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 							resolve([name, map as TextureMap, texture]);
 						};
 						image.onerror = (e) => {

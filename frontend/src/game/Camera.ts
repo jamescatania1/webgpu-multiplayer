@@ -4,7 +4,7 @@ export default class Camera {
 	public position = vec3.create();
 	public fov = 85;
 	public near = 0.1;
-	public far = 100.0;
+	public far = 1000.0;
 	public pitch = 0.0;
 	public yaw = 0.0;
 	public roll = 0.0;
@@ -19,6 +19,7 @@ export default class Camera {
 	public readonly rotProjMatrix = mat4.create();
 
 	constructor(gl: WebGL2RenderingContext) {
+		this.position[1] = 2.0;
 		this.update(gl);
 	}
 
@@ -31,12 +32,6 @@ export default class Camera {
 		this.right[1] = 0;
 		this.right[2] = Math.sin(this.yaw - Math.PI);
 		vec3.cross(this.up, this.forward, this.right);
-
-		if (gl.canvas.width != window.innerWidth || gl.canvas.height != window.innerHeight) {
-			gl.canvas.width = window.innerWidth;
-			gl.canvas.height = window.innerHeight;
-			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-		}
 
 		mat4.perspective(
 			this.projMatrix,

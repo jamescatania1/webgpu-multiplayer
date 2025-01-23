@@ -38,16 +38,16 @@ export default class Lighting {
 
 		vec3.normalize(this.sunDirection, this.sunPosition);
 		this.pointLights = [
-			{
-				position: vec3.fromValues(1, 6, 3),
-				color: vec3.fromValues(1, 0, 1),
-				intensity: 3.0,
-			},
-			{
-				position: vec3.fromValues(-1, 2, -2),
-				color: vec3.fromValues(0, 1, 1),
-				intensity: 1.0,
-			},
+			// {
+			// 	position: vec3.fromValues(1, 6, 3),
+			// 	color: vec3.fromValues(1, 0, 1),
+			// 	intensity: 3.0,
+			// },
+			// {
+			// 	position: vec3.fromValues(-1, 2, -2),
+			// 	color: vec3.fromValues(0, 1, 1),
+			// 	intensity: 1.0,
+			// },
 		];
 
 		// build the skybox vao
@@ -80,7 +80,7 @@ export default class Lighting {
 		gl.bindVertexArray(null);
 
 		// load the skybox hdr texture
-		loadHDR("/sky_indoor.hdr").then((hdr) => {
+		loadHDR("/sky.hdr").then((hdr) => {
 			const rectSkyboxTexture = gl.createTexture();
 			gl.bindTexture(gl.TEXTURE_2D, rectSkyboxTexture);
 			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB16F, hdr.width, hdr.height, 0, gl.RGB, gl.HALF_FLOAT, hdr.data);
