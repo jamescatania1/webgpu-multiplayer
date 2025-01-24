@@ -18,6 +18,7 @@ uniform mat4 model_matrix;
 uniform mat3 normal_matrix;
 
 out vec3 position;
+out vec4 clip_position;
 out vec3 normal;
 out vec2 uv;
 out lowp vec3 color;
@@ -29,6 +30,7 @@ void main() {
     vec4 world_pos = model_matrix * vec4(vec3(x, y, z) * scale, 1.0) + vec4(offset, 0.0);
     position = world_pos.xyz;
     gl_Position = view_proj_matrix * world_pos;
+    clip_position = gl_Position;
 
     float r = float((vertex_xyzc.y >> 11u) & 0x1Fu) / 31.0;
     float g = float((vertex_xyzc.y >> 5u) & 0x3Fu) / 63.0;

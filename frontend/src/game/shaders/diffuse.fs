@@ -6,6 +6,7 @@ const float MAX_PREFILTER_LOD = 4.0;
 
 in vec3 normal;
 in vec3 position;
+in vec4 clip_position;
 in vec3 color;
 in vec2 uv;
 
@@ -26,6 +27,7 @@ uniform sampler2D albedo_map;
 uniform sampler2D normal_map;
 uniform sampler2D metallic_map;
 uniform sampler2D roughness_map;
+uniform sampler2D ao_map;
 
 // & 0x1 = has albedo, & 0x2 = has normal, & 0x4 = has metallic, & 0x8 = has roughness
 uniform uint texture_component_flags; 
@@ -33,7 +35,6 @@ uniform uint texture_component_flags;
 // these and vertex color attribute are used if the texture doesn't have the component
 uniform float metallic;
 uniform float roughness;
-// uniform float ao;
 
 out vec4 out_color;
 
@@ -158,11 +159,13 @@ void main() {
         vec2 brdf = texture(sky_brdf_lut, vec2(cos_lo, rough)).rg;
         vec3 specular = specular_irradiance * (f_0 * brdf.x + brdf.y);
 
-        // ambient = (diffuse + specular) * ao;
-        ambient = (diffuse + specular);
+        vec2 clip_uv = (clip_position.xy / clip_position.w) * 0.5 + 0.5;
+        float occlusion_factor = texture(ao_map, clip_uv).r;
+        ambient = (diffuse + specular) * (1.0 - (1.0 - occlusion_factor) * 0.5);
     }
-    light += ambient + vec3(uv.x) * 0.0001;
+    light += ambient;
 
-    // gamma correct
     out_color = vec4(light, 1.0); 
+    // float occlusion_factor = texture(ao_map, uv).r;
+    // out_color = vec4(occlusion_factor, light.y, light.z, 1.0); 
 }

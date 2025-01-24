@@ -36,6 +36,12 @@ export default class Scene {
 	private readonly quadVertexBuffer: WebGLBuffer;
 	private readonly depthPrepassFBO: WebGLFramebuffer;
 	private readonly depthPrepassTexture: WebGLTexture;
+	private readonly ssaoTexture: WebGLTexture;
+	private readonly ssaoNoiseTexture: WebGLTexture;
+	private readonly ssaoQuadVertexBuffer: WebGLBuffer;
+	private readonly ssaoFBO: WebGLFramebuffer;
+	private readonly ssaoBlurTexture: WebGLTexture;
+	private readonly ssaoKernel: Float32Array;
 
 	monke: Model;
 
@@ -64,11 +70,55 @@ export default class Scene {
 		gl.enableVertexAttribArray(this.shaders.postFX.attributes.vertex_position);
 		gl.vertexAttribPointer(this.shaders.postFX.attributes.tex_coords, 2, gl.FLOAT, false, 16, 8);
 		gl.enableVertexAttribArray(this.shaders.postFX.attributes.tex_coords);
+		gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+		this.ssaoQuadVertexBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.ssaoQuadVertexBuffer);
+		gl.bufferData(
+			gl.ARRAY_BUFFER,
+			new Float32Array([-1.0, 1.0, 0.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0]),
+			gl.STATIC_DRAW,
+		);
+		gl.vertexAttribPointer(this.shaders.ssao.attributes.vertex_position, 2, gl.FLOAT, false, 16, 0);
+		gl.enableVertexAttribArray(this.shaders.ssao.attributes.vertex_position);
+		gl.vertexAttribPointer(this.shaders.ssao.attributes.tex_coords, 2, gl.FLOAT, false, 16, 8);
+		gl.enableVertexAttribArray(this.shaders.ssao.attributes.tex_coords);
+		gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+		// create ssao kernel
+		const samples = 128;
+		this.ssaoKernel = new Float32Array(samples * 3);
+		for (let i = 0; i < samples; i++) {
+			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random());
+			vec3.normalize(sample, sample);
+			let scale = i / samples;
+			scale = 0.1 + scale * scale * (1.0 - 0.1);
+			vec3.scale(sample, sample, scale);
+			this.ssaoKernel.set(sample, i * 3);
+		}
+
+		let ssaoNoise = new Float32Array(16 * 3);
+		for (let i = 0; i < 16; i++) {
+			const random = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, 0.0);
+			ssaoNoise.set(random, i * 3);
+		}
+		this.ssaoNoiseTexture = gl.createTexture();
+		gl.activeTexture(gl.TEXTURE10);
+		gl.bindTexture(gl.TEXTURE_2D, this.ssaoNoiseTexture);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB16F, 4, 4, 0, gl.RGB, gl.FLOAT, ssaoNoise);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+		gl.bindTexture(gl.TEXTURE_2D, null);
 
 		this.drawFBO = gl.createFramebuffer();
 		this.postFBO = gl.createFramebuffer();
 		this.depthPrepassFBO = gl.createFramebuffer();
 		this.depthPrepassTexture = gl.createTexture();
+		this.ssaoFBO = gl.createFramebuffer();
+		this.ssaoTexture = gl.createTexture();
+		this.ssaoBlurTexture = gl.createTexture();
 		this.updateFramebuffers(gl);
 
 		this.monke = new Model(gl, "/monke-smooth.bobj", textures.monke, this.shaders.diffuse, this.shaders.depth);
@@ -174,13 +224,60 @@ export default class Scene {
 		// depth prepass
 		gl.bindFramebuffer(gl.FRAMEBUFFER, this.depthPrepassFBO);
 		gl.colorMask(false, false, false, false);
+		gl.clear(gl.DEPTH_BUFFER_BIT);
 		gl.depthMask(true);
 		this.drawScene(gl, true);
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		gl.colorMask(true, true, true, true);
+		gl.bindVertexArray(null);
 		
+		// ssao
+		gl.disable(gl.DEPTH_TEST);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, this.ssaoFBO);
+		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.ssaoTexture, 0);
+		gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+		gl.clearColor(0.0, 0.0, 0.0, 1.0);
+		gl.clearDepth(1.0);
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		gl.useProgram(this.shaders.ssao.program);
+		gl.activeTexture(gl.TEXTURE9);
+		gl.uniform1i(this.shaders.ssao.uniforms.depth_map, 9);
+		gl.bindTexture(gl.TEXTURE_2D, this.depthPrepassTexture);
+		gl.activeTexture(gl.TEXTURE10);
+		gl.uniform1i(this.shaders.ssao.uniforms.noise_map, 10);
+		gl.bindTexture(gl.TEXTURE_2D, this.ssaoNoiseTexture);
+		gl.uniform3fv(this.shaders.ssao.uniforms.kernel, this.ssaoKernel);
+		gl.uniformMatrix4fv(this.shaders.ssao.uniforms.proj_matrix, false, this.camera.projMatrix);
+		gl.uniformMatrix4fv(this.shaders.ssao.uniforms.proj_matrix_inverse, false, this.camera.projMatrixInverse);
+		gl.uniform2f(this.shaders.ssao.uniforms.noise_scale, gl.canvas.width / 4.0, gl.canvas.height / 4.0);
+
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.ssaoQuadVertexBuffer);
+		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+		// ssao blur
+		gl.bindFramebuffer(gl.FRAMEBUFFER, this.ssaoFBO);
+		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.ssaoBlurTexture, 0);
+		gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+		gl.clearColor(0.0, 0.0, 0.0, 1.0);
+		gl.clearDepth(1.0);
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		gl.useProgram(this.shaders.ssaoBlur.program);
+		gl.activeTexture(gl.TEXTURE11);
+		gl.uniform1i(this.shaders.ssaoBlur.uniforms.ssao_map, 11);
+		gl.bindTexture(gl.TEXTURE_2D, this.ssaoTexture);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.ssaoQuadVertexBuffer);
+		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+		gl.activeTexture(gl.TEXTURE12);
+		gl.bindTexture(gl.TEXTURE_2D, this.ssaoBlurTexture);
+		gl.enable(gl.DEPTH_TEST);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
 		// draw the scene
 		gl.bindFramebuffer(gl.FRAMEBUFFER, this.drawFBO);
-		gl.colorMask(true, true, true, true);
 		// gl.depthMask(false);
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 		this.drawScene(gl, false);
@@ -206,14 +303,11 @@ export default class Scene {
 
 		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 		gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
-		
+
 		// draw post process
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
 		gl.useProgram(this.shaders.postFX.program);
-		gl.activeTexture(gl.TEXTURE8);
-		gl.uniform1i(this.shaders.postFX.uniforms.texture, 8);
-
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadVertexBuffer);
 		gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 	}
@@ -223,7 +317,7 @@ export default class Scene {
 		for (const obj of this.objects.values()) {
 			obj.draw && obj.draw(gl, this, this.camera, depthOnly);
 		}
-		
+
 		// draw skybox
 		if (!depthOnly) {
 			this.lighting.draw(gl);
@@ -233,7 +327,7 @@ export default class Scene {
 	private updateFramebuffers(gl: WebGL2RenderingContext) {
 		const width = gl.canvas.width;
 		const height = gl.canvas.height;
-		
+
 		// updates the buffers for the post fx pass
 		// kinda sketchy since webgl doesn't have multisample textures
 		const msaa = Math.min(4, gl.getParameter(gl.MAX_SAMPLES));
@@ -262,7 +356,6 @@ export default class Scene {
 
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-
 		// updates the fbo/texture for the depth pass
 		gl.activeTexture(gl.TEXTURE9);
 		gl.bindTexture(gl.TEXTURE_2D, this.depthPrepassTexture);
@@ -277,6 +370,31 @@ export default class Scene {
 
 		gl.clear(gl.DEPTH_BUFFER_BIT);
 		gl.bindTexture(gl.TEXTURE_2D, null);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+		// updates the fbo/texture for the ssao pass
+		gl.activeTexture(gl.TEXTURE11);
+		gl.bindTexture(gl.TEXTURE_2D, this.ssaoTexture);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, width, height, 0, gl.RED, gl.FLOAT, null);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+		gl.bindTexture(gl.TEXTURE_2D, null);
+
+		gl.activeTexture(gl.TEXTURE12);
+		gl.bindTexture(gl.TEXTURE_2D, this.ssaoBlurTexture);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, width, height, 0, gl.RED, gl.FLOAT, null);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+		gl.bindTexture(gl.TEXTURE_2D, null);
+
+		gl.bindFramebuffer(gl.FRAMEBUFFER, this.ssaoFBO);
+		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.ssaoTexture, 0);
+
+		gl.clear(gl.COLOR_BUFFER_BIT);
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 	}
 

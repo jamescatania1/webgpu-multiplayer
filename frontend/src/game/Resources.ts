@@ -13,11 +13,6 @@ const textureData = {
 		maps: ["albedo", "normal", "metallic", "roughness"],
 		extension: "webp",
 	},
-    base: {
-        baseURL: "/base",
-        maps: ["albedo", "normal", "metallic", "roughness"],
-        extension: "webp",
-    },
     empty: {
         baseURL: "/",
         maps: [],

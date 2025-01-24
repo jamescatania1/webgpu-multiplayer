@@ -14,7 +14,8 @@ export default class Camera {
 	public readonly right = vec3.create();
 	private readonly negativePos = vec3.create();
 	private readonly viewMatrix = mat4.create();
-	private readonly projMatrix = mat4.create();
+	public readonly projMatrix = mat4.create();
+	public readonly projMatrixInverse = mat4.create();
 	public readonly viewProjMatrix = mat4.create();
 	public readonly rotProjMatrix = mat4.create();
 
@@ -42,6 +43,7 @@ export default class Camera {
 		);
 		mat4.lookAt(this.viewMatrix, this.position, vec3.add(vec3.create(), this.position, this.forward), this.up);
 		mat4.mul(this.viewProjMatrix, this.projMatrix, this.viewMatrix);
+		mat4.invert(this.projMatrixInverse, this.projMatrix);
 
 		mat4.lookAt(this.rotProjMatrix, vec3.create(), this.forward, this.up);
 		mat4.mul(this.rotProjMatrix, this.projMatrix, this.rotProjMatrix);

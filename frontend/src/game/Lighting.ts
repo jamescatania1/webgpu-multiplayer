@@ -26,7 +26,7 @@ export default class Lighting {
 	private readonly maxLights = 4;
 	private readonly uboBuffer = new Float32Array(40);
 	private readonly sunPosition = vec3.fromValues(20, 50, 17);
-	public readonly sunIntensity = 1.0;
+	public readonly sunIntensity = 0.8;
 
 	private readonly skyboxShader: Shader;
 	private readonly skyboxVAO: WebGLVertexArrayObject;
