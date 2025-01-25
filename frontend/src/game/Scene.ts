@@ -228,6 +228,7 @@ export default class Scene {
 		gl.depthFunc(gl.LEQUAL);
 		gl.enable(gl.DEPTH_TEST);
 		gl.clearColor(1.0, 1.0, 1.0, 1.0);
+		gl.clearDepth(1.0);
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 		this.drawScene(gl, true);
 		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
@@ -307,6 +308,17 @@ export default class Scene {
 		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.drawFBO);
 		gl.depthFunc(gl.LEQUAL);
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		gl.useProgram(this.shaders.diffuse.program);
+		gl.activeTexture(gl.TEXTURE9);
+		gl.uniform1i(this.shaders.diffuse.uniforms.depth_map, 9);
+		gl.bindTexture(gl.TEXTURE_2D, this.depthPrepassTexture);
+		gl.activeTexture(gl.TEXTURE10);
+		gl.uniform1i(this.shaders.diffuse.uniforms.noise_map, 10);
+		gl.bindTexture(gl.TEXTURE_2D, this.ssaoNoiseTexture);
+		gl.uniform3fv(this.shaders.diffuse.uniforms.kernel, this.ssaoKernel);
+		gl.uniformMatrix4fv(this.shaders.diffuse.uniforms.proj_matrix, false, this.camera.projMatrix);
+		gl.uniformMatrix4fv(this.shaders.diffuse.uniforms.proj_matrix_inverse, false, this.camera.projMatrixInverse);
+		gl.uniform2f(this.shaders.diffuse.uniforms.noise_scale, gl.canvas.width / 4.0, gl.canvas.height / 4.0);
 		this.drawScene(gl, false);
 		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 
@@ -403,6 +415,8 @@ export default class Scene {
 		this.depthPrepassTexture = gl.createTexture();
 		gl.activeTexture(gl.TEXTURE9);
 		gl.bindTexture(gl.TEXTURE_2D, this.depthPrepassTexture);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
 		gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, width, height);
 
 		gl.bindFramebuffer(gl.FRAMEBUFFER, this.depthResolveFBO);

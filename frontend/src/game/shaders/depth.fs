@@ -14,5 +14,7 @@ float linearize_depth(float depth) {
 }
 
 void main() {             
-    out_color = vec4(clip_position.xyz, 1.0);
+    // out_color = vec4(clip_position.xyz / clip_position.w, linearize_depth(gl_FragCoord.z) / far);
+    // out_color = vec4(clip_position.xyz / clip_position.w, linearize_depth(gl_FragCoord.z) / far);
+    out_color = clip_position;
 }

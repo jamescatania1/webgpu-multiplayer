@@ -49,7 +49,7 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 			"normal_map",
 			"metallic_map",
 			"roughness_map",
-			"ao_map",
+			// "ao_map",
 			"offset",
 			"scale",
 			"model_matrix",
@@ -57,6 +57,12 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 			"texture_component_flags",
 			"metallic",
 			"roughness",
+			"depth_map",
+			"noise_map",
+			"proj_matrix",
+			"proj_matrix_inverse",
+			"kernel",
+			"noise_scale",
 		],
 	});
 	gl.useProgram(diffuse.program);
@@ -67,15 +73,15 @@ export function loadShaders(gl: WebGL2RenderingContext): Shaders {
 	gl.uniform1i(diffuse.uniforms.normal_map, 5);
 	gl.uniform1i(diffuse.uniforms.metallic_map, 6);
 	gl.uniform1i(diffuse.uniforms.roughness_map, 7);
-	gl.uniform1i(diffuse.uniforms.ao_map, 12);
+	// gl.uniform1i(diffuse.uniforms.ao_map, 12);
+	gl.uniform1i(diffuse.uniforms.depth_map, 9);
+	gl.uniform1i(diffuse.uniforms.noise_map, 10);
 
 	const depth = new Shader(gl, {
 		vertex: depthVert,
 		fragment: depthFrag,
 		attributes: ["vertex_xyzc"],
-		uniforms: [
-			"model_matrix", "offset", "scale",
-		],
+		uniforms: ["model_matrix", "offset", "scale"],
 	});
 
 	const skybox = new Shader(gl, {

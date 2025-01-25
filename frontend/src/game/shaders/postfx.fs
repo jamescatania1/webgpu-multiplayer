@@ -63,6 +63,8 @@ vec3 aces(vec3 x) {
 
 void main() {             
     vec3 color = texture(color_map, uv).rgb;
+    // float occlusion_factor = texture(depth_map, uv).r;
+    // color *= max(1.0, occlusion_factor);
 
     // creds acerola
 
