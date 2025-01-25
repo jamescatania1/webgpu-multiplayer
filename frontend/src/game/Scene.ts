@@ -15,6 +15,7 @@ export interface SceneObject {
 const MAX_VEL = 1.0;
 const ACCEL = 0.01;
 const MOUSE_SENSITIVITY = 2.0;
+const SSAO_KERNEL_SIZE = 32;
 
 export default class Scene {
 	public readonly shaders: Shaders;
@@ -33,9 +34,10 @@ export default class Scene {
 
 	private readonly drawFBO: WebGLFramebuffer;
 	private readonly postFBO: WebGLFramebuffer;
-	private readonly quadVertexBuffer: WebGLBuffer;
 	private readonly depthPrepassFBO: WebGLFramebuffer;
-	private readonly depthPrepassTexture: WebGLTexture;
+	private readonly depthResolveFBO: WebGLFramebuffer;
+	private readonly quadVertexBuffer: WebGLBuffer;
+	private depthPrepassTexture: WebGLTexture;
 	private readonly ssaoTexture: WebGLTexture;
 	private readonly ssaoNoiseTexture: WebGLTexture;
 	private readonly ssaoQuadVertexBuffer: WebGLBuffer;
@@ -86,12 +88,11 @@ export default class Scene {
 		gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
 		// create ssao kernel
-		const samples = 128;
-		this.ssaoKernel = new Float32Array(samples * 3);
-		for (let i = 0; i < samples; i++) {
+		this.ssaoKernel = new Float32Array(SSAO_KERNEL_SIZE * 3);
+		for (let i = 0; i < SSAO_KERNEL_SIZE; i++) {
 			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random());
 			vec3.normalize(sample, sample);
-			let scale = i / samples;
+			let scale = i / SSAO_KERNEL_SIZE;
 			scale = 0.1 + scale * scale * (1.0 - 0.1);
 			vec3.scale(sample, sample, scale);
 			this.ssaoKernel.set(sample, i * 3);
@@ -115,6 +116,7 @@ export default class Scene {
 		this.drawFBO = gl.createFramebuffer();
 		this.postFBO = gl.createFramebuffer();
 		this.depthPrepassFBO = gl.createFramebuffer();
+		this.depthResolveFBO = gl.createFramebuffer();
 		this.depthPrepassTexture = gl.createTexture();
 		this.ssaoFBO = gl.createFramebuffer();
 		this.ssaoTexture = gl.createTexture();
@@ -222,15 +224,40 @@ export default class Scene {
 		}
 
 		// depth prepass
-		gl.bindFramebuffer(gl.FRAMEBUFFER, this.depthPrepassFBO);
-		gl.colorMask(false, false, false, false);
-		gl.clear(gl.DEPTH_BUFFER_BIT);
-		gl.depthMask(true);
+		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.depthPrepassFBO);
+		gl.depthFunc(gl.LEQUAL);
+		gl.enable(gl.DEPTH_TEST);
+		gl.clearColor(1.0, 1.0, 1.0, 1.0);
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 		this.drawScene(gl, true);
+		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+
+		// blit the depth prepass texture
+		gl.disable(gl.DEPTH_TEST);
+		gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.depthPrepassFBO);
+		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.depthResolveFBO);
+		gl.readBuffer(gl.COLOR_ATTACHMENT0);
+		gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+		gl.blitFramebuffer(
+			0,
+			0,
+			gl.canvas.width,
+			gl.canvas.height,
+			0,
+			0,
+			gl.canvas.width,
+			gl.canvas.height,
+			gl.COLOR_BUFFER_BIT,
+			gl.NEAREST,
+		);
+
+		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+		gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 		gl.colorMask(true, true, true, true);
 		gl.bindVertexArray(null);
-		
+
 		// ssao
 		gl.disable(gl.DEPTH_TEST);
 		gl.bindFramebuffer(gl.FRAMEBUFFER, this.ssaoFBO);
@@ -277,13 +304,14 @@ export default class Scene {
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
 		// draw the scene
-		gl.bindFramebuffer(gl.FRAMEBUFFER, this.drawFBO);
-		// gl.depthMask(false);
+		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.drawFBO);
+		gl.depthFunc(gl.LEQUAL);
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 		this.drawScene(gl, false);
-		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 
-		//blit
+		// blit
+		gl.disable(gl.DEPTH_TEST);
 		gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.drawFBO);
 		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.postFBO);
 		gl.readBuffer(gl.COLOR_ATTACHMENT0);
@@ -304,7 +332,7 @@ export default class Scene {
 		gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 		gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
 
-		// draw post process
+		// // draw post process
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
 		gl.useProgram(this.shaders.postFX.program);
@@ -357,19 +385,29 @@ export default class Scene {
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
 		// updates the fbo/texture for the depth pass
-		gl.activeTexture(gl.TEXTURE9);
-		gl.bindTexture(gl.TEXTURE_2D, this.depthPrepassTexture);
-		gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT32F, width, height, 0, gl.DEPTH_COMPONENT, gl.FLOAT, null);
-		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+		const depthPassColorBuffer = gl.createRenderbuffer();
+		gl.bindRenderbuffer(gl.RENDERBUFFER, depthPassColorBuffer);
+		gl.renderbufferStorageMultisample(gl.RENDERBUFFER, msaa, gl.RGBA32F, width, height);
+
+		const depthPassDepthBuffer = gl.createRenderbuffer();
+		gl.bindRenderbuffer(gl.RENDERBUFFER, depthPassDepthBuffer);
+		gl.renderbufferStorageMultisample(gl.RENDERBUFFER, msaa, gl.DEPTH_COMPONENT16, width, height);
 
 		gl.bindFramebuffer(gl.FRAMEBUFFER, this.depthPrepassFBO);
-		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.depthPrepassTexture, 0);
+		gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, depthPassColorBuffer);
+		gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthPassDepthBuffer);
 
-		gl.clear(gl.DEPTH_BUFFER_BIT);
-		gl.bindTexture(gl.TEXTURE_2D, null);
+		gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+		this.depthPrepassTexture = gl.createTexture();
+		gl.activeTexture(gl.TEXTURE9);
+		gl.bindTexture(gl.TEXTURE_2D, this.depthPrepassTexture);
+		gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, width, height);
+
+		gl.bindFramebuffer(gl.FRAMEBUFFER, this.depthResolveFBO);
+		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.depthPrepassTexture, 0);
+
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
 		// updates the fbo/texture for the ssao pass

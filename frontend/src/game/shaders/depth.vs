@@ -15,10 +15,13 @@ uniform vec3 offset;
 uniform float scale;
 uniform mat4 model_matrix;
 
+out vec4 clip_position;
+
 void main() {      
     float x = float(vertex_xyzc.x >> 16u) / 65535.0 - 0.5;
     float y = float(vertex_xyzc.x & 0xFFFFu) / 65535.0 - 0.5;
     float z = float(vertex_xyzc.y >> 16u) / 65535.0 - 0.5;
     vec4 world_pos = model_matrix * vec4(vec3(x, y, z) * scale, 1.0) + vec4(offset, 0.0);
-    gl_Position = view_proj_matrix * vec4(world_pos.xyz, 1.0);
+    gl_Position = view_proj_matrix * world_pos;
+    clip_position = gl_Position;
 }

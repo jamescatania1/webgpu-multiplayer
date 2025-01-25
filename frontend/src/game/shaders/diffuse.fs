@@ -122,7 +122,7 @@ void main() {
 
         directional = l_radiance * cos_li * (diffuse_brdf + specular_brdf);
     }
-    light += directional;
+    light += directional * 0.00001;
 
     vec3 point = vec3(0.0); {
         for (int i = 0; i < 4; i++) {
@@ -161,11 +161,9 @@ void main() {
 
         vec2 clip_uv = (clip_position.xy / clip_position.w) * 0.5 + 0.5;
         float occlusion_factor = texture(ao_map, clip_uv).r;
-        ambient = (diffuse + specular) * (1.0 - (1.0 - occlusion_factor) * 0.5);
+        ambient = (diffuse + specular) * (1.0 - (1.0 - occlusion_factor) * 0.9);
     }
     light += ambient;
 
     out_color = vec4(light, 1.0); 
-    // float occlusion_factor = texture(ao_map, uv).r;
-    // out_color = vec4(occlusion_factor, light.y, light.z, 1.0); 
 }

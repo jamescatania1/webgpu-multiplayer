@@ -3,7 +3,7 @@ precision highp float;
 
 in vec2 uv;
 
-const int max_kernel_size = 128;
+const int max_kernel_size = 32;
 const float sample_radius = 0.53;
 
 uniform sampler2D depth_map;
@@ -17,8 +17,11 @@ uniform vec3 kernel[max_kernel_size];
 out float out_color;
 
 vec3 view_pos(vec2 coords) {
-    float depth_value = texture(depth_map, coords).r;
-    vec4 clip_pos = vec4(coords.x * 2.0 - 1.0, coords.y * 2.0 - 1.0, depth_value * 2.0 - 1.0, 1.0);
+    // float depth_value = texture(depth_map, coords).r;
+    // vec4 clip_pos = vec4(coords.x * 2.0 - 1.0, coords.y * 2.0 - 1.0, depth_value * 2.0 - 1.0, 1.0);
+    // vec4 view_pos = proj_matrix_inverse * clip_pos;
+    // return view_pos.xyz / view_pos.w;
+    vec4 clip_pos = texture(depth_map, coords);
     vec4 view_pos = proj_matrix_inverse * clip_pos;
     return view_pos.xyz / view_pos.w;
 }
