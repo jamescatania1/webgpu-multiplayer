@@ -138,11 +138,11 @@ export default class Game {
 			],
 		} as GPURenderPassDescriptor;
 		const screenAttachment = (renderPassDescriptor.colorAttachments as any)[0];
+		const encoder = device.createCommandEncoder({ label: "render encoder" });
 
 		const render = () => {
 			screenAttachment.view = ctx.getCurrentTexture().createView();
 
-			const encoder = device.createCommandEncoder({ label: "render encoder" });
 			const pass = encoder.beginRenderPass(renderPassDescriptor);
 			pass.setPipeline(pipeline);
 			pass.draw(6);
@@ -150,6 +150,8 @@ export default class Game {
 
 			device.queue.submit([encoder.finish()]);
 		};
+
+		render();
 	}
 }
 
