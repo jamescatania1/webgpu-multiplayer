@@ -1,4 +1,4 @@
-import { mat4, vec3 } from "gl-matrix";
+import { mat4, vec3 } from "wgpu-matrix";
 
 export default class Camera {
 	public position = vec3.create();
@@ -12,19 +12,18 @@ export default class Camera {
 	public readonly up = vec3.fromValues(0, 1, 0);
 	public readonly forward = vec3.create();
 	public readonly right = vec3.create();
-	private readonly negativePos = vec3.create();
-	private readonly viewMatrix = mat4.create();
 	public readonly projMatrix = mat4.create();
 	public readonly projMatrixInverse = mat4.create();
 	public readonly viewProjMatrix = mat4.create();
 	public readonly rotProjMatrix = mat4.create();
+	private readonly viewMatrix = mat4.create();
 
-	constructor(gl: WebGL2RenderingContext) {
+	constructor(canvas: HTMLCanvasElement) {
 		this.position[1] = 2.0;
-		this.update(gl);
+		this.update(canvas);
 	}
 
-	public update(gl: WebGL2RenderingContext) {
+	public update(canvas: HTMLCanvasElement) {
 		this.forward[0] = Math.cos(this.yaw - Math.PI / 2.0);
 		this.forward[1] = Math.tan(this.pitch);
 		this.forward[2] = Math.sin(this.yaw - Math.PI / 2.0);
@@ -33,19 +32,19 @@ export default class Camera {
 		this.right[1] = 0;
 		this.right[2] = Math.sin(this.yaw - Math.PI);
 		vec3.cross(this.up, this.forward, this.right);
-
+		
 		mat4.perspective(
-			this.projMatrix,
 			(this.fov * Math.PI) / 180,
-			gl.canvas.width / gl.canvas.height,
+			canvas.width / canvas.height,
 			this.near,
 			this.far,
+			this.projMatrix,
 		);
-		mat4.lookAt(this.viewMatrix, this.position, vec3.add(vec3.create(), this.position, this.forward), this.up);
-		mat4.mul(this.viewProjMatrix, this.projMatrix, this.viewMatrix);
-		mat4.invert(this.projMatrixInverse, this.projMatrix);
+		mat4.lookAt(this.position, vec3.add(this.position, this.forward, vec3.create()), this.up, this.viewMatrix);
+		mat4.mul(this.projMatrix, this.viewMatrix, this.viewProjMatrix);
+		mat4.invert(this.projMatrix, this.projMatrixInverse);
 
-		mat4.lookAt(this.rotProjMatrix, vec3.create(), this.forward, this.up);
-		mat4.mul(this.rotProjMatrix, this.projMatrix, this.rotProjMatrix);
+		mat4.lookAt(vec3.create(), this.forward, this.up, this.rotProjMatrix);
+		mat4.mul(this.projMatrix, this.rotProjMatrix, this.rotProjMatrix);
 	}
 }

@@ -2,9 +2,20 @@ import { gameStats } from "$lib/stores.svelte";
 import Input from "./Input";
 import Scene from "./Scene";
 import WasmWorker from "./wasm/WasmWorker?worker";
+import { mat4, vec3 } from "wgpu-matrix";
+import { default as cubeShaderSource } from "./shaders/cube.wgsl";
+import Renderer from "./Renderer";
+
+const MSAA_SAMPLES = 4;
+
+export type RenderContext = {
+	adapter: GPUAdapter,
+	device: GPUDevice,
+	ctx: GPUCanvasContext,
+};
 
 export default class Game {
-	// private input: Input;
+	private input: Input;
 	private worker: Worker;
 
 	private drawTime: number = 0;
@@ -13,25 +24,16 @@ export default class Game {
 	private statsPollStart: number = 0;
 
 	constructor(canvas: HTMLCanvasElement) {
+		this.input = new Input(canvas);
+
 		this.init(canvas)
-			.then(() => {
-				console.log("Game initialized");
+			.then((ctx) => {
+				const renderer = new Renderer(canvas, ctx);
 			})
 			.catch((e) => {
 				console.error(e);
 			});
-		// const gl = canvas.getContext("webgl2");
-		// if (!gl) {
-		// 	throw new Error("Unable to initialize WebGL. Your browser or machine may not support it.");
-		// }
-		// if (!gl.getExtension("EXT_color_buffer_float")) {
-		// 	throw new Error("Rendering to floating point textures is not supported on this platform");
-		// }
-		// if (!gl.getExtension("OES_texture_float_linear")) {
-		// 	throw new Error("Rendering to floating point textures is not supported on this platform");
-		// }
 
-		// const input = new Input(canvas);
 		// const scene = new Scene(gl);
 		// this.input = input;
 
@@ -80,14 +82,14 @@ export default class Game {
 	}
 
 	public onDestroy() {
-		// this.input.onDestroy();
+		this.input.onDestroy();
 		this.worker.terminate();
 	}
 
-	public async init(canvas: HTMLCanvasElement) {
+	public async init(canvas: HTMLCanvasElement): Promise<RenderContext> {
 		const adapter = await navigator.gpu?.requestAdapter();
 		const device = await adapter?.requestDevice();
-		if (!device || !navigator) {
+		if (!device || !adapter) {
 			throw new Error("WebGPU not supported on this browser");
 		}
 
@@ -95,6 +97,12 @@ export default class Game {
 		if (!ctx) {
 			throw new Error("Failed to bind game to the active canvas.");
 		}
+
+		return { 
+			adapter: adapter, 
+			device: device, 
+			ctx: ctx 
+		};
 
 		const resize = () => {
 			canvas.width = Math.min(window.innerWidth, device.limits.maxTextureDimension2D);
@@ -108,95 +116,222 @@ export default class Game {
 			format: presentationFormat,
 		});
 
-		const vertexShader = device.createShaderModule({
-			label: "vertex shader",
-			code: vertexShaderSource,
-		});
-		const fragmentShader = device.createShaderModule({
-			label: "fragment shader",
-			code: fragmentShaderSource,
+		const cubeShader = device.createShaderModule({
+			label: "cube shader",
+			code: cubeShaderSource,
 		});
 
 		const pipeline = device.createRenderPipeline({
 			label: "render pipeline",
 			layout: "auto",
-			vertex: { module: vertexShader },
+			vertex: {
+				module: cubeShader,
+				entryPoint: "vs",
+				buffers: [
+					{
+						arrayStride: 6 * 4,
+						stepMode: "vertex",
+						attributes: [
+							{
+								// position
+								shaderLocation: 0,
+								offset: 0,
+								format: "float32x3",
+							},
+							{
+								// color
+								shaderLocation: 1,
+								offset: 3 * 4,
+								format: "float32x3",
+							},
+						],
+					},
+				],
+			},
 			fragment: {
-				module: fragmentShader,
+				module: cubeShader,
+				entryPoint: "fs",
 				targets: [{ format: presentationFormat }],
 			},
+			primitive: {
+				topology: "triangle-list",
+				cullMode: "back",
+			},
+			depthStencil: {
+				depthWriteEnabled: true,
+				depthCompare: "less-equal",
+				format: "depth24plus",
+			},
+			multisample: {
+				count: MSAA_SAMPLES,
+			}
 		});
-		const renderPassDescriptor = {
+		const depthTexture = device.createTexture({
+			size: [canvas.width, canvas.height],
+			sampleCount: MSAA_SAMPLES,
+			format: "depth24plus",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const depthView = depthTexture.createView();
+		const outputTexture = device.createTexture({
+			size: [canvas.width, canvas.height],
+			sampleCount: MSAA_SAMPLES,
+			format: presentationFormat,
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const outputView = outputTexture.createView();
+
+		// global data uniform buffer
+		const globalUniformBuffer = device.createBuffer({
+			size: 16 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+		const globalUniformBindGroup = device.createBindGroup({
+			layout: pipeline.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: {
+						buffer: globalUniformBuffer,
+					},
+				},
+			],
+		});
+
+		const renderPassDescriptor: GPURenderPassDescriptor = {
 			label: "render pass descriptor",
 			colorAttachments: [
 				{
-					clearValue: [0.0, 0.0, 0.25, 1.0],
+					clearValue: [0.0, 0.0, 0.15, 1.0],
 					loadOp: "clear",
 					storeOp: "store",
-					view: ctx.getCurrentTexture().createView(),
+					view: outputView,
+					resolveTarget: ctx.getCurrentTexture().createView(),
 				},
 			],
-		} as GPURenderPassDescriptor;
+			depthStencilAttachment: {
+				view: depthView,
+				depthClearValue: 1.0,
+				depthLoadOp: "clear",
+				depthStoreOp: "store",
+			},
+		};
 		const screenAttachment = (renderPassDescriptor.colorAttachments as any)[0];
-		const encoder = device.createCommandEncoder({ label: "render encoder" });
+
+		// vertex buffer for cube
+		// prettier-ignore
+		const cubeVertexData = new Float32Array([
+			// x, y, z,    r, g, b
+			-0.5, -0.5,  0.5,   1.0, 0.0, 0.0,  // front bottom left
+			 0.5, -0.5,  0.5,   0.0, 1.0, 0.0,  // front bottom right
+			 0.5,  0.5,  0.5,   0.0, 0.0, 1.0,  // front top right
+			-0.5,  0.5,  0.5,   1.0, 1.0, 0.0,  // front top left
+			-0.5, -0.5, -0.5,   0.0, 1.0, 1.0,  // back bottom left
+			 0.5, -0.5, -0.5,   1.0, 0.0, 1.0,  // back bottom right
+			 0.5,  0.5, -0.5,   1.0, 1.0, 1.0,  // back top right
+			-0.5,  0.5, -0.5,   1.0, 0.0, 0.0,  // back top left
+		]);
+
+		const cubeVertexBuffer = device.createBuffer({
+			label: "cube vertex buffer",
+			size: cubeVertexData.byteLength,
+			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		new Float32Array(cubeVertexBuffer.getMappedRange()).set(cubeVertexData);
+		cubeVertexBuffer.unmap();
+
+		// index buffer for cube
+		// prettier-ignore
+		const cubeIndexData = new Uint16Array([
+			// front
+			0, 1, 2,  0, 2, 3,
+			// right
+			1, 5, 6,  1, 6, 2,
+			// back
+			5, 4, 7,  5, 7, 6,
+			// left
+			4, 0, 3,  4, 3, 7,
+			// top
+			3, 2, 6,  3, 6, 7,
+			// bottom
+			4, 5, 1,  4, 1, 0,
+		]);
+		const cubeIndexBuffer = device.createBuffer({
+			label: "cube index buffer",
+			size: cubeIndexData.byteLength,
+			usage: GPUBufferUsage.INDEX,
+			mappedAtCreation: true,
+		});
+		new Uint16Array(cubeIndexBuffer.getMappedRange()).set(cubeIndexData);
+		cubeIndexBuffer.unmap();
+
+		// uniform buffer for cube
+		const cubeUniformBuffer = device.createBuffer({
+			size: 16 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+		const cubeUniformBindGroup = device.createBindGroup({
+			layout: pipeline.getBindGroupLayout(1),
+			entries: [
+				{
+					binding: 0,
+					resource: {
+						buffer: cubeUniformBuffer,
+					},
+				},
+			],
+		});
+		const cubeModelMatrix = mat4.identity();
+
+		// write matrix data to the global uniform buffer
+		const viewMatrix = mat4.identity();
+		mat4.translate(viewMatrix, vec3.fromValues(0, 0, -4), viewMatrix);
+		const aspect = canvas.width / canvas.height;
+		const projMatrix = mat4.perspective((80 * Math.PI) / 180, aspect, 0.1, 100);
+		const viewProjMatrix = mat4.multiply(projMatrix, viewMatrix);
+		device.queue.writeBuffer(
+			globalUniformBuffer,
+			0,
+			viewProjMatrix.buffer,
+			viewProjMatrix.byteOffset,
+			viewProjMatrix.byteLength,
+		);
 
 		const render = () => {
-			screenAttachment.view = ctx.getCurrentTexture().createView();
+			mat4.identity(cubeModelMatrix);
+			const timestamp = performance.now() / 1000;
+			mat4.rotate(
+				cubeModelMatrix,
+				vec3.fromValues(Math.sin(timestamp), Math.cos(timestamp), 0),
+				1,
+				cubeModelMatrix,
+			);
+			device.queue.writeBuffer(
+				cubeUniformBuffer,
+				0,
+				cubeModelMatrix.buffer,
+				cubeModelMatrix.byteOffset,
+				cubeModelMatrix.byteLength,
+			);
 
+			screenAttachment.resolveTarget = ctx.getCurrentTexture().createView();
+
+			const encoder = device.createCommandEncoder({ label: "render encoder" });
 			const pass = encoder.beginRenderPass(renderPassDescriptor);
 			pass.setPipeline(pipeline);
-			pass.draw(6);
+			pass.setBindGroup(0, globalUniformBindGroup);
+			pass.setBindGroup(1, cubeUniformBindGroup);
+			pass.setVertexBuffer(0, cubeVertexBuffer);
+			pass.setIndexBuffer(cubeIndexBuffer, "uint16");
+			pass.drawIndexed(cubeIndexData.length);
 			pass.end();
 
 			device.queue.submit([encoder.finish()]);
+
+			window.requestAnimationFrame(render);
 		};
 
-		render();
+		window.requestAnimationFrame(render);
 	}
 }
-
-const vertexShaderSource = /* wgsl */ `
-	// data structure to store output of vertex function
-	struct VertexOut {
-		@builtin(position) pos: vec4f,
-		@location(0) color: vec4f
-	};
-
-	// process the points of the triangle
-	@vertex 
-	fn vs(
-		@builtin(vertex_index) vertexIndex : u32
-	) -> VertexOut {
-		let pos = array(
-			vec2f(   0,  0.8),  // top center
-			vec2f(-0.8, -0.8),  // bottom left
-			vec2f( 0.8, -0.8)   // bottom right
-		);
-
-		let color = array(
-			vec4f(1.0, .0, .0, .0),
-			vec4f( .0, 1., .0, .0),
-			vec4f( .0, .0, 1., .0)
-		);
-
-		var out: VertexOut;
-		out.pos = vec4f(pos[vertexIndex], 0.0, 1.0);
-		out.color = color[vertexIndex];
-
-		return out;
-	}
-`;
-
-const fragmentShaderSource = /* wgsl */ `
-	// data structure to input to fragment shader
-	struct VertexOut {
-		@builtin(position) pos: vec4f,
-		@location(0) color: vec4f
-	};
-
-	// set the colors of the area within the triangle
-	@fragment 
-	fn fs(in: VertexOut) -> @location(0) vec4f {
-		return in.color;
-	}
-`;
