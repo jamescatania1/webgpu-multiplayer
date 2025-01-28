@@ -7,11 +7,10 @@ export default class Transform {
 
 	public readonly matrix = mat4.create();
 	public readonly normalMatrix = mat3.create();
-	public modelScale: number = 1;
 
-	private finalScale = vec3.create();
-	private quaternion = quat.create();
-	private rotationMatrix = mat4.create();
+	private readonly quaternion = quat.create();
+	private readonly rotationMatrix = mat4.create();
+	private readonly normalMatrix4 = mat4.create();
 
 	constructor() {
 		this.update();
@@ -19,15 +18,14 @@ export default class Transform {
 
 	public update() {
 		quat.fromEuler(this.rotation[0], this.rotation[1], this.rotation[2], "xyz", this.quaternion);
-		vec3.scale(this.scale, this.modelScale, this.finalScale);
 		mat4.identity(this.matrix);
 		mat4.translation(this.position, this.matrix);
 		mat4.fromQuat(this.quaternion, this.rotationMatrix);
 		mat4.multiply(this.matrix, this.rotationMatrix, this.matrix);
-		mat4.scale(this.matrix, this.finalScale, this.matrix);
-
-		mat3.fromMat4(this.matrix, this.normalMatrix);
-		mat3.translate(this.normalMatrix, this.normalMatrix);
-		mat3.inverse(this.normalMatrix, this.normalMatrix);
+		mat4.scale(this.matrix, this.scale, this.matrix);
+		
+		mat4.inverse(this.matrix, this.normalMatrix4);
+		mat4.transpose(this.normalMatrix4, this.normalMatrix4);
+		mat3.fromMat4(this.normalMatrix4, this.normalMatrix);
 	}
 }

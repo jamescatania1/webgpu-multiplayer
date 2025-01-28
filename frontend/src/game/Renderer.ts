@@ -26,14 +26,25 @@ export default class Renderer {
 	private readonly pipelines: {
 		basic: GPURenderPipeline;
 		PBR: GPURenderPipeline;
+		depth: GPURenderPipeline;
+		postFX: GPURenderPipeline;
 	};
-	private renderPassDescriptor: GPURenderPassDescriptor | null = null;
-    private readonly presentationFormat: GPUTextureFormat;
+	private renderPassDescriptors: {
+		depthPass: GPURenderPassDescriptor;
+		sceneDraw: GPURenderPassDescriptor;
+		postFX: GPURenderPassDescriptor;
+	} | null = null;
+	private readonly presentationFormat: GPUTextureFormat;
 
 	private readonly shaders: Shaders;
 	private readonly camera: Camera;
 	private objects: Model[] = [];
 	private cubes: Cube[] = [];
+	private postFXQuad: {
+		vertexBuffer: GPUBuffer;
+		sampler: GPUSampler,
+		bindGroup: GPUBindGroup | null,
+	};
 
 	private readonly inputVec: Vec2 = vec2.create();
 	private readonly accel: Vec3 = vec3.create();
@@ -148,12 +159,52 @@ export default class Renderer {
 				count: 4,
 			},
 		});
-		const PBRPipelineLayout = this.device.createPipelineLayout({
+		// pipelines for drawing the pbr scene models
+		const sceneDrawPipelineLayout = this.device.createPipelineLayout({
 			bindGroupLayouts: [cameraBindGroupLayout, transformBindGroupLayout],
+		});
+		const depthPrepassRenderPipeline = this.device.createRenderPipeline({
+			label: "depth prepass",
+			layout: sceneDrawPipelineLayout,
+			vertex: {
+				module: this.shaders.depth,
+				entryPoint: "vs",
+				buffers: [
+					{
+						arrayStride: 4 * 4,
+						stepMode: "vertex",
+						attributes: [
+							{
+								//xyzc
+								shaderLocation: 0,
+								offset: 0,
+								format: "uint32x2",
+							},
+						],
+					},
+				],
+			},
+			fragment: {
+				module: this.shaders.depth,
+				entryPoint: "fs",
+				targets: [],
+			},
+			primitive: {
+				topology: "triangle-list",
+				cullMode: "back",
+			},
+			depthStencil: {
+				depthWriteEnabled: true,
+				depthCompare: "less-equal",
+				format: "depth24plus",
+			},
+			multisample: {
+				count: 4,
+			},
 		});
 		const PBRRenderPipeline = this.device.createRenderPipeline({
 			label: "render pipeline",
-			layout: PBRPipelineLayout,
+			layout: sceneDrawPipelineLayout,
 			vertex: {
 				module: this.shaders.PBR,
 				entryPoint: "vs",
@@ -169,13 +220,13 @@ export default class Renderer {
 								format: "uint32x2",
 							},
 							{
-								// uv
+								// normal
 								shaderLocation: 1,
 								offset: 2 * 4,
 								format: "uint32",
 							},
 							{
-								// normal
+								// uv
 								shaderLocation: 2,
 								offset: 3 * 4,
 								format: "uint32",
@@ -187,24 +238,59 @@ export default class Renderer {
 			fragment: {
 				module: this.shaders.PBR,
 				entryPoint: "fs",
-				targets: [{ format: this.presentationFormat }],
+				targets: [{ format: "rgba16float" }],
 			},
 			primitive: {
 				topology: "triangle-list",
 				cullMode: "back",
 			},
 			depthStencil: {
-				depthWriteEnabled: true,
-				depthCompare: "less-equal",
+				depthWriteEnabled: false,
+				depthCompare: "equal",
 				format: "depth24plus",
 			},
 			multisample: {
 				count: 4,
 			},
 		});
+		const postFXPipeline = this.device.createRenderPipeline({
+			label: "post processing pipeline",
+			layout: "auto",
+			vertex: {
+				module: this.shaders.postFX,
+				entryPoint: "vs",
+				buffers: [
+					{
+						arrayStride: 8,
+						stepMode: "vertex",
+						attributes: [
+							{
+								shaderLocation: 0,
+								offset: 0,
+								format: "float32x2",
+							},
+						],
+					},
+				],
+			},
+			fragment: {
+				module: this.shaders.postFX,
+				entryPoint: "fs",
+				targets: [{ format: this.presentationFormat }],
+			},
+			primitive: {
+				topology: "triangle-strip",
+				cullMode: "back",
+			},
+			multisample: {
+				count: 4,
+			}
+		});
 		this.pipelines = {
 			basic: basicRenderPipeline,
+			depth: depthPrepassRenderPipeline,
 			PBR: PBRRenderPipeline,
+			postFX: postFXPipeline,
 		};
 
 		// global uniform bind groups
@@ -221,8 +307,34 @@ export default class Renderer {
 			camera: cameraUniformBindGroup,
 		};
 
-        // create the output textures and render pass descriptor
-        this.buildRenderPassDescriptor();
+		// post processing quad buffers and sampler
+		{
+			const quadVertexData = new Float32Array([
+				-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0,
+			]);
+			const quadVertexBuffer = this.device.createBuffer({
+				label: "post fx quad vertex buffer",
+				size: quadVertexData.byteLength,
+				usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+				mappedAtCreation: true,
+			});
+			new Float32Array(quadVertexBuffer.getMappedRange()).set(quadVertexData);
+			quadVertexBuffer.unmap();
+
+			const sceneTextureSampler = this.device.createSampler({
+				magFilter: "linear",
+				minFilter: "linear",
+			})
+
+			this.postFXQuad = {
+				vertexBuffer: quadVertexBuffer,
+				sampler: sceneTextureSampler,
+				bindGroup: null,
+			};
+		}
+
+		// create the output textures and render pass descriptor
+		this.buildRenderPassDescriptors();
 
 		const numCubes = 10;
 		for (let i = 0; i < numCubes; i++) {
@@ -235,9 +347,13 @@ export default class Renderer {
 		});
 	}
 
-    private buildRenderPassDescriptor() {
-        // output depth texture
+	/** 
+	 * Called upon initialization and change of the canvas size
+	 **/
+	private buildRenderPassDescriptors() {
+		// output depth texture
 		const depthTexture = this.device.createTexture({
+			label: "scene depth texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 4,
 			format: "depth24plus",
@@ -245,27 +361,55 @@ export default class Renderer {
 		});
 		const depthView = depthTexture.createView();
 
-		// ouptut color texture
-		const outputTexture = this.device.createTexture({
+		// scene draw color texture
+		const sceneDrawTexture = this.device.createTexture({
+			label: "scene draw texture",
+			size: [this.canvas.width, this.canvas.height],
+			sampleCount: 4,
+			format: "rgba16float",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const sceneDrawView = sceneDrawTexture.createView();
+
+		// resolve texture for post-processing output
+		const sceneResolveTexture = this.device.createTexture({
+			label: "scene single-sample texture",
+			size: [this.canvas.width, this.canvas.height],
+			sampleCount: 1,
+			format: "rgba16float",
+			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const sceneResolveView = sceneResolveTexture.createView();
+
+		// screen ouptut color texture
+		const screenOutputTexture = this.device.createTexture({
+			label: "post fx screen output texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 4,
 			format: this.presentationFormat,
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
-		const outputView = outputTexture.createView();
+		const screenOutputView = screenOutputTexture.createView();
 
-        // render pass descriptors
-		this.renderPassDescriptor = {
-			label: "render pass descriptor",
-			colorAttachments: [
+		// bind group for the post processing textures
+		this.postFXQuad.bindGroup = this.device.createBindGroup({
+			layout: this.pipelines.postFX.getBindGroupLayout(0),
+			entries: [
 				{
-					clearValue: [0.0, 0.0, 0.15, 1.0],
-					loadOp: "clear",
-					storeOp: "store",
-					view: outputView,
-					resolveTarget: this.ctx.getCurrentTexture().createView(),
+					binding: 0,
+					resource: this.postFXQuad.sampler,
 				},
-			],
+				{
+					binding: 1,
+					resource: sceneResolveView,
+				}
+			]
+		})
+
+		// render pass descriptors
+		const depthPassDescriptor: GPURenderPassDescriptor = {
+			label: "depth pass descriptor",
+			colorAttachments: [],
 			depthStencilAttachment: {
 				view: depthView,
 				depthClearValue: 1.0,
@@ -273,7 +417,42 @@ export default class Renderer {
 				depthStoreOp: "store",
 			},
 		};
-    }
+		const sceneDrawDescriptor: GPURenderPassDescriptor = {
+			label: "output screen draw descriptor",
+			colorAttachments: [
+				{
+					clearValue: [0.0, 0.0, 0.15, 1.0],
+					loadOp: "clear",
+					storeOp: "store",
+					view: sceneDrawView,
+					resolveTarget: sceneResolveView,
+				},
+			],
+			depthStencilAttachment: {
+				view: depthView,
+				depthLoadOp: "load",
+				depthStoreOp: "discard",
+			},
+		};
+		const postFXDescriptor: GPURenderPassDescriptor = {
+			label: "post processing draw descriptor",
+			colorAttachments: [
+				{
+					clearValue: [0.0, 0.0, 0.0, 1.0],
+					loadOp: "clear",
+					storeOp: "store",
+					view: screenOutputView,
+					resolveTarget: this.ctx.getCurrentTexture().createView(),
+				}
+			]
+		}
+
+		this.renderPassDescriptors = {
+			depthPass: depthPassDescriptor,
+			sceneDraw: sceneDrawDescriptor,
+			postFX: postFXDescriptor,
+		};
+	}
 
 	// public add(obj: SceneObject) {
 	//     this.objects.push(obj);
@@ -349,44 +528,69 @@ export default class Renderer {
 			}
 		}
 
-		(this.renderPassDescriptor!.colorAttachments as any)[0].resolveTarget = this.ctx
+		// basic
+		// pass.setPipeline(this.pipelines.basic);
+		// pass.setBindGroup(0, this.globalUniformBindGroups.camera);
+
+		// for (const cube of this.cubes) {
+		// 	pass.setBindGroup(1, cube.modelData.uniformBindGroup);
+		// 	pass.setVertexBuffer(0, cube.modelData.vertexBuffer);
+		// 	pass.setIndexBuffer(cube.modelData.indexBuffer, cube.modelData.indexFormat);
+		// 	pass.drawIndexed(cube.modelData.indexCount);
+		// }
+
+		(this.renderPassDescriptors!.postFX.colorAttachments as any)[0].resolveTarget = this.ctx
 			.getCurrentTexture()
 			.createView();
-
 		const encoder = this.device.createCommandEncoder({ label: "render encoder" });
 
-		const pass = encoder.beginRenderPass(this.renderPassDescriptor!);
+		{
+			// depth prepass
+			const depthPass = encoder.beginRenderPass(this.renderPassDescriptors!.depthPass);
+			depthPass.setPipeline(this.pipelines.depth);
+			depthPass.setBindGroup(0, this.globalUniformBindGroups.camera);
 
-		// basic
-		pass.setPipeline(this.pipelines.basic);
-		pass.setBindGroup(0, this.globalUniformBindGroups.camera);
-
-		for (const cube of this.cubes) {
-			pass.setBindGroup(1, cube.modelData.uniformBindGroup);
-			pass.setVertexBuffer(0, cube.modelData.vertexBuffer);
-			pass.setIndexBuffer(cube.modelData.indexBuffer, cube.modelData.indexFormat);
-			pass.drawIndexed(cube.modelData.indexCount);
+			for (const model of this.objects) {
+				depthPass.setBindGroup(1, model.transformUniformBindGroup);
+				depthPass.setVertexBuffer(0, model.modelData.vertexBuffer);
+				depthPass.setIndexBuffer(model.modelData.indexBuffer, model.modelData.indexFormat);
+				depthPass.drawIndexed(model.modelData.indexCount);
+			}
+			depthPass.end();
 		}
 
-		// PBR
-		pass.setPipeline(this.pipelines.PBR);
-		pass.setBindGroup(0, this.globalUniformBindGroups.camera);
+		{
+			// screen draw pass
+			const drawPass = encoder.beginRenderPass(this.renderPassDescriptors!.sceneDraw);
+			drawPass.setPipeline(this.pipelines.PBR);
+			drawPass.setBindGroup(0, this.globalUniformBindGroups.camera);
 
-		for (const model of this.objects) {
-			// this.updateCube(model);
-			pass.setBindGroup(1, model.transformUniformBindGroup);
-			pass.setVertexBuffer(0, model.modelData.vertexBuffer);
-			pass.setIndexBuffer(model.modelData.indexBuffer, model.modelData.indexFormat);
-			pass.drawIndexed(model.modelData.indexCount);
+			for (const model of this.objects) {
+				drawPass.setBindGroup(1, model.transformUniformBindGroup);
+				drawPass.setVertexBuffer(0, model.modelData.vertexBuffer);
+				drawPass.setIndexBuffer(model.modelData.indexBuffer, model.modelData.indexFormat);
+				drawPass.drawIndexed(model.modelData.indexCount);
+			}
+			drawPass.end();
 		}
-		pass.end();
+
+		{
+			// post processing pass
+			const postFXPass = encoder.beginRenderPass(this.renderPassDescriptors!.postFX);
+			postFXPass.setPipeline(this.pipelines.postFX);
+			
+			postFXPass.setBindGroup(0, this.postFXQuad.bindGroup);
+			postFXPass.setVertexBuffer(0, this.postFXQuad.vertexBuffer);
+			postFXPass.draw(5);
+			postFXPass.end();
+		}
 
 		this.device.queue.submit([encoder.finish()]);
 	}
 
 	public onResize() {
-        this.buildRenderPassDescriptor();
-    }
+		this.buildRenderPassDescriptors();
+	}
 }
 
 class Cube {

@@ -4,7 +4,7 @@ export default class Camera {
 	public position = vec3.create();
 	public fov = 85;
 	public near = 0.1;
-	public far = 1000.0;
+	public far = 300.0;
 	public pitch = 0.0;
 	public yaw = 0.0;
 	public roll = 0.0;
