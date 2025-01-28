@@ -1,16 +1,23 @@
-import {default as cubeShaderSource } from "./shaders/cube.wgsl";
+import { default as basicShaderSource } from "./shaders/basic.wgsl";
+import { default as PBRShaderSource } from "./shaders/pbr.wgsl";
 
 export type Shaders = {
-	cube: GPUShaderModule;
+	basic: GPUShaderModule;
+	PBR: GPUShaderModule;
 };
 
 export function loadShaders(device: GPUDevice): Shaders {
-	const cube = device.createShaderModule({
+	const basic = device.createShaderModule({
 		label: "cube shader",
-		code: cubeShaderSource,
+		code: basicShaderSource,
+	});
+	const PBR = device.createShaderModule({
+		label: "pbr shader",
+		code: PBRShaderSource,
 	});
 
 	return {
-		cube: cube,
+		basic: basic,
+		PBR: PBR,
 	};
 }

@@ -1,20 +1,15 @@
-import { vec3 } from "gl-matrix";
-import type Camera from "./Camera";
-import type Scene from "./Scene";
-import type { SceneObject } from "./Scene";
-import Shader from "./Shaders";
+import { vec3, type Vec3 } from "wgpu-matrix";
 import Transform from "./Transform";
-import type { TextureResource } from "./Resources";
 
 type ModelData = {
-	vao: WebGLVertexArrayObject;
-	depthVAO: WebGLVertexArrayObject;
+	vertexBuffer: GPUBuffer;
 	vertexCount: number;
-	indexType: GLenum;
+	indexBuffer: GPUBuffer;
+	indexFormat: GPUIndexFormat;
 	indexCount: number;
 	triangleCount: number;
 	scale: number;
-	offset: vec3;
+	offset: Vec3;
 	hasColor: boolean;
 	hasUV: boolean;
 	hasNormal: boolean;
@@ -32,7 +27,60 @@ enum ModelReadState {
 	Done,
 }
 
-const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader, depthShader: Shader): Promise<ModelData> => {
+export default class Model {
+	public readonly modelData: ModelData;
+	private readonly transformUniformBuffer: GPUBuffer;
+	public readonly transformUniformBindGroup: GPUBindGroup;
+	public readonly transform: Transform;
+	private readonly transformBufferData: Float32Array;
+	public metallic = 0.0;
+	public roughness = 1.0;
+	public ao = 1.0;
+
+	constructor(device: GPUDevice, transformBindGroupLayout: GPUBindGroupLayout, modelData: ModelData) {
+		this.modelData = modelData;
+		this.transform = new Transform();
+		this.transformBufferData = new Float32Array((16 + 12 + 4) * 4);
+
+		// uniform buffer and bind group for the transform
+		this.transformUniformBuffer = device.createBuffer({
+			size: (16 + 12 + 4) * 4 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+		this.transformUniformBindGroup = device.createBindGroup({
+			layout: transformBindGroupLayout,
+			entries: [
+				{
+					binding: 0,
+					resource: {
+						buffer: this.transformUniformBuffer,
+					},
+				},
+			],
+		});
+
+		this.update(device);
+	}
+
+	public update(device: GPUDevice) {
+		if (!this.modelData) {
+			return;
+		}
+		this.transformBufferData.set(this.transform.matrix, 0);
+		this.transformBufferData.set(this.transform.normalMatrix, 16);
+		this.transformBufferData.set(this.modelData.offset, 16 + 12);
+		this.transformBufferData[16 + 12 + 3] = 1.0 / this.modelData.scale;
+		device.queue.writeBuffer(
+			this.transformUniformBuffer,
+			0,
+			this.transformBufferData.buffer,
+			this.transformBufferData.byteOffset,
+			this.transformBufferData.byteLength,
+		);
+	}
+}
+
+export async function loadBOBJ(device: GPUDevice, url: string): Promise<ModelData> {
 	const startTime = performance.now();
 	const debug = false;
 
@@ -67,68 +115,77 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader, depth
 				.then(() => {
 					if (debug) {
 						console.log("Done reading file");
-						console.log(`Total time to load model: ${(performance.now() - startTime) / 1000} seconds`);
+						console.log(`Total time to load model: ${(performance.now() - startTime).toFixed(1)}ms`);
 					}
-					// vao
-					const vao = gl.createVertexArray();
-					gl.bindVertexArray(vao);
 
 					// vertex buffer
-					const vertexBuffer = gl.createBuffer();
-					gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-					gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-
-					let stride = hasUV && hasNormal ? 16 : hasUV || hasNormal ? 12 : 8;
-
-					gl.vertexAttribIPointer(shader.attributes.vertex_xyzc, 2, gl.UNSIGNED_INT, stride, 0);
-					gl.enableVertexAttribArray(shader.attributes.vertex_xyzc);
-
-					if (hasNormal) {
-						gl.vertexAttribIPointer(shader.attributes.vertex_normal, 1, gl.UNSIGNED_INT, stride, 8);
-						gl.enableVertexAttribArray(shader.attributes.vertex_normal);
-					} else {
-						gl.disableVertexAttribArray(shader.attributes.vertex_normal);
-					}
-					if (hasUV) {
-						const offset = hasNormal ? 12 : 8;
-						gl.vertexAttribIPointer(shader.attributes.vertex_uv, 1, gl.UNSIGNED_INT, stride, offset);
-						gl.enableVertexAttribArray(shader.attributes.vertex_uv);
-					} else {
-						gl.disableVertexAttribArray(shader.attributes.vertex_uv);
-					}
+					const vertexBuffer = device.createBuffer({
+						label: `vertex buffer ${url}`,
+						size: vertices.byteLength,
+						usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+						mappedAtCreation: true,
+					});
+					new Uint32Array(vertexBuffer.getMappedRange()).set(vertices);
+					vertexBuffer.unmap();
 
 					// index buffer
-					const indexBuffer = gl.createBuffer();
-					gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-					gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-					gl.bindVertexArray(null);
-				
-
-					// depth vao
-					const depthVAO = gl.createVertexArray();
-					gl.bindVertexArray(depthVAO);
-					const depthVertexBuffer = gl.createBuffer();
-					gl.bindBuffer(gl.ARRAY_BUFFER, depthVertexBuffer);
-					gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-					gl.vertexAttribIPointer(depthShader.attributes.vertex_xyzc, 2, gl.UNSIGNED_INT, stride, 0);
-					gl.enableVertexAttribArray(depthShader.attributes.vertex_xyzc);
-					gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-					gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+					const indexBuffer = device.createBuffer({
+						label: `index buffer ${url}`,
+						size: indices.byteLength,
+						usage: GPUBufferUsage.INDEX,
+						mappedAtCreation: true,
+					});
+					if (indexSize === 2) {
+						new Uint16Array(indexBuffer.getMappedRange()).set(indices);
+					} else if (indexSize === 4) {
+						new Uint32Array(indexBuffer.getMappedRange()).set(indices);
+					} else {
+						throw new Error(`Received ${indexSize} size indices for model ${url}. Must be either 2 or 4`);
+					}
+					indexBuffer.unmap();
 
 					resolve({
-						vao: vao,
+						vertexBuffer: vertexBuffer,
 						vertexCount: vertexCount,
-						triangleCount: triangleCount,
+						indexBuffer: indexBuffer,
+						indexFormat: indexSize === 2 ? "uint16" : "uint32",
 						indexCount: indexCount,
-						indexType:
-							indexSize === 1 ? gl.UNSIGNED_BYTE : indexSize === 2 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
+						triangleCount: triangleCount,
 						scale: scale,
 						offset: offset,
 						hasColor: hasColor,
 						hasUV: hasUV,
 						hasNormal: hasNormal,
-						depthVAO: depthVAO,
 					});
+
+					// let stride = hasUV && hasNormal ? 16 : hasUV || hasNormal ? 12 : 8;
+					// gl.vertexAttribIPointer(shader.attributes.vertex_xyzc, 2, gl.UNSIGNED_INT, stride, 0);
+					// gl.enableVertexAttribArray(shader.attributes.vertex_xyzc);
+
+					// if (hasNormal) {
+					// 	gl.vertexAttribIPointer(shader.attributes.vertex_normal, 1, gl.UNSIGNED_INT, stride, 8);
+					// 	gl.enableVertexAttribArray(shader.attributes.vertex_normal);
+					// } else {
+					// 	gl.disableVertexAttribArray(shader.attributes.vertex_normal);
+					// }
+					// if (hasUV) {
+					// 	const offset = hasNormal ? 12 : 8;
+					// 	gl.vertexAttribIPointer(shader.attributes.vertex_uv, 1, gl.UNSIGNED_INT, stride, offset);
+					// 	gl.enableVertexAttribArray(shader.attributes.vertex_uv);
+					// } else {
+					// 	gl.disableVertexAttribArray(shader.attributes.vertex_uv);
+					// }
+
+					// // depth vao
+					// const depthVAO = gl.createVertexArray();
+					// gl.bindVertexArray(depthVAO);
+					// const depthVertexBuffer = gl.createBuffer();
+					// gl.bindBuffer(gl.ARRAY_BUFFER, depthVertexBuffer);
+					// gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+					// gl.vertexAttribIPointer(depthShader.attributes.vertex_xyzc, 2, gl.UNSIGNED_INT, stride, 0);
+					// gl.enableVertexAttribArray(depthShader.attributes.vertex_xyzc);
+					// gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+					// gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 				})
 				.catch((err) => {
 					reject(`Error loading file ${url}, ${err}`);
@@ -201,7 +258,7 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader, depth
 				offset[0] = view.getFloat32(readIndex, true);
 				offset[1] = view.getFloat32(readIndex + 4, true);
 				offset[2] = view.getFloat32(readIndex + 8, true);
-				if (debug) console.log("model offset:", vec3.str(offset));
+				if (debug) console.log("model offset:", `(${offset[0]}, ${offset[1]}, ${offset[2]})`);
 				readIndex += 12;
 			}
 			if (readState === ModelReadState.VertexCount && chunkSize - readIndex >= 4) {
@@ -285,87 +342,5 @@ const loadBOBJ = (gl: WebGL2RenderingContext, url: string, shader: Shader, depth
 			if (debug) console.log("reading next chunk");
 			return readChunk();
 		}
-	}
-};
-
-export default class Model implements SceneObject {
-	private shader: Shader;
-	private depthShader: Shader;
-	private modelData: ModelData | null = null;
-	private textures: TextureResource;
-
-	public transform: Transform;
-	public metallic = 0.0;
-	public roughness = 1.0;
-	public ao = 1.0;
-
-	constructor(gl: WebGL2RenderingContext, url: string, textures: TextureResource, shader: Shader, depthShader: Shader) {
-		this.transform = new Transform(gl);
-		this.transform.update(gl);
-		this.shader = shader;
-		this.depthShader = depthShader;
-		this.textures = textures;
-
-		loadBOBJ(gl, url, shader, depthShader)
-			.then((data) => {
-				this.modelData = data;
-				this.transform.update(gl);
-			})
-			.catch((err) => {
-				throw new Error(`Error loading model: ${err}`);
-			});
-	}
-
-	public draw(gl: WebGL2RenderingContext, scene: Scene, camera: Camera, depthOnly: boolean) {
-		if (!this.modelData) {
-			return;
-		}
-		
-		if (depthOnly) {
-			gl.bindVertexArray(this.modelData.depthVAO);
-			gl.useProgram(this.depthShader.program);
-
-			gl.uniform3fv(this.depthShader.uniforms.offset, this.modelData.offset);
-			gl.uniform1f(this.depthShader.uniforms.scale, 1.0 / this.modelData.scale);
-			gl.uniformMatrix4fv(this.depthShader.uniforms.model_matrix, false, this.transform.matrix);
-		}
-		else {
-			gl.bindVertexArray(this.modelData.vao);
-			gl.useProgram(this.shader.program);
-
-			// textures
-			let textureFlags = 0x0;
-			if (this.textures.albedo && gl.isTexture(this.textures.albedo)) {
-				gl.activeTexture(gl.TEXTURE4);
-				gl.bindTexture(gl.TEXTURE_2D, this.textures.albedo);
-				textureFlags |= 0x1;
-			}
-			if (this.textures.normal && gl.isTexture(this.textures.normal)) {
-				gl.activeTexture(gl.TEXTURE5);
-				gl.bindTexture(gl.TEXTURE_2D, this.textures.normal);
-				textureFlags |= 0x2;
-			}
-			if (this.textures.metallic && gl.isTexture(this.textures.metallic)) {
-				gl.activeTexture(gl.TEXTURE6);
-				gl.bindTexture(gl.TEXTURE_2D, this.textures.metallic);
-				textureFlags |= 0x4;
-			}
-			if (this.textures.roughness && gl.isTexture(this.textures.roughness)) {
-				gl.activeTexture(gl.TEXTURE7);
-				gl.bindTexture(gl.TEXTURE_2D, this.textures.roughness);
-				textureFlags |= 0x8;
-			}
-
-			// uniforms
-			gl.uniform3fv(this.shader.uniforms.offset, this.modelData.offset);
-			gl.uniform1f(this.shader.uniforms.scale, 1.0 / this.modelData.scale);
-			gl.uniformMatrix4fv(this.shader.uniforms.model_matrix, false, this.transform.matrix);
-			gl.uniformMatrix3fv(this.shader.uniforms.normal_matrix, false, this.transform.normalMatrix);
-			gl.uniform1ui(this.shader.uniforms.texture_component_flags, textureFlags);
-			gl.uniform1f(this.shader.uniforms.metallic, this.metallic);
-			gl.uniform1f(this.shader.uniforms.roughness, this.roughness);
-		}
-
-		gl.drawElements(gl.TRIANGLES, this.modelData.indexCount, this.modelData.indexType, 0);
 	}
 }
