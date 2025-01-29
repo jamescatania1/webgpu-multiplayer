@@ -28,7 +28,7 @@ fn vs(in: VertexIn) -> VertexOut {
     let x: f32 = f32(in.vertex_xyzc.x >> 16u) / 65535.0 - 0.5;
     let y: f32 = f32(in.vertex_xyzc.x & 0xFFFFu) / 65535.0 - 0.5;
     let z: f32 = f32(in.vertex_xyzc.y >> 16u) / 65535.0 - 0.5;
-    let world_pos: vec4f = u_transform.model_matrix * vec4f(vec3f(x, y, z) * u_transform.model_scale, 1.0) + vec4f(u_transform.model_offset, 0.0);
+    let world_pos: vec4f = u_transform.model_matrix * vec4f(vec3f(x, y, z) * u_transform.model_scale + u_transform.model_offset, 1.0);
 
     var out: VertexOut;
     out.pos = u_global.view_proj_matrix * world_pos;
@@ -40,7 +40,6 @@ fn linearize_depth(depth: f32) -> f32 {
 }
 
 @fragment 
-fn fs(in: VertexOut) -> @location(0) f32 {
-    var depth_linear: f32 = linearize_depth(in.pos.z) / far;
-    return in.pos.z;
+fn fs(in: VertexOut) -> @location(0) vec4f {
+    return vec4f(linearize_depth(in.pos.z) / far, 1.0, 1.0, 1.0);
 }

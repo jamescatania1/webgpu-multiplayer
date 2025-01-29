@@ -20,8 +20,14 @@ export default class Renderer {
 	private readonly uniformBuffers: {
 		camera: GPUBuffer;
 	};
-	private readonly globalUniformBindGroups: {
+	private globalUniformBindGroupLayouts: {
+		camera: GPUBindGroupLayout;
+		depth: GPUBindGroupLayout;
+	};
+	private globalUniformBindGroups: {
 		camera: GPUBindGroup;
+		depth: GPUBindGroup | null;
+		drawTexture: GPUBindGroup | null;
 	};
 	private readonly pipelines: {
 		basic: GPURenderPipeline;
@@ -42,8 +48,7 @@ export default class Renderer {
 	private cubes: Cube[] = [];
 	private postFXQuad: {
 		vertexBuffer: GPUBuffer;
-		sampler: GPUSampler,
-		bindGroup: GPUBindGroup | null,
+		sampler: GPUSampler;
 	};
 
 	private readonly inputVec: Vec2 = vec2.create();
@@ -89,6 +94,25 @@ export default class Renderer {
 				},
 			],
 		});
+		const depthBindGroupLayout = this.device.createBindGroupLayout({
+			label: "depth texture bind group layout",
+			entries: [
+				{
+					binding: 0,
+					visibility: GPUShaderStage.FRAGMENT,
+					texture: {},
+				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.FRAGMENT,
+					sampler: {},
+				},
+			],
+		});
+		this.globalUniformBindGroupLayouts = {
+			camera: cameraBindGroupLayout,
+			depth: depthBindGroupLayout,
+		};
 		const transformBindGroupLayout = this.device.createBindGroupLayout({
 			label: "transform bind group layout",
 			entries: [
@@ -112,7 +136,7 @@ export default class Renderer {
 
 		// render pipelines
 		const basicPipelineLayout = this.device.createPipelineLayout({
-			bindGroupLayouts: [cameraBindGroupLayout, basicModelBindGroupLayout],
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.camera, basicModelBindGroupLayout],
 		});
 		const basicRenderPipeline = this.device.createRenderPipeline({
 			label: "render pipeline",
@@ -153,19 +177,19 @@ export default class Renderer {
 			depthStencil: {
 				depthWriteEnabled: true,
 				depthCompare: "less-equal",
-				format: "depth24plus",
+				format: "depth32float",
 			},
 			multisample: {
 				count: 4,
 			},
 		});
 		// pipelines for drawing the pbr scene models
-		const sceneDrawPipelineLayout = this.device.createPipelineLayout({
-			bindGroupLayouts: [cameraBindGroupLayout, transformBindGroupLayout],
+		const depthPrepassPipelineLayout = this.device.createPipelineLayout({
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.camera, transformBindGroupLayout],
 		});
 		const depthPrepassRenderPipeline = this.device.createRenderPipeline({
 			label: "depth prepass",
-			layout: sceneDrawPipelineLayout,
+			layout: depthPrepassPipelineLayout,
 			vertex: {
 				module: this.shaders.depth,
 				entryPoint: "vs",
@@ -187,7 +211,7 @@ export default class Renderer {
 			fragment: {
 				module: this.shaders.depth,
 				entryPoint: "fs",
-				targets: [],
+				targets: [{ format: "r16float", writeMask: GPUColorWrite.RED }],
 			},
 			primitive: {
 				topology: "triangle-list",
@@ -196,15 +220,22 @@ export default class Renderer {
 			depthStencil: {
 				depthWriteEnabled: true,
 				depthCompare: "less-equal",
-				format: "depth24plus",
+				format: "depth32float",
 			},
 			multisample: {
 				count: 4,
 			},
 		});
+		const PBRPipelineLayout = this.device.createPipelineLayout({
+			bindGroupLayouts: [
+				this.globalUniformBindGroupLayouts.camera,
+				transformBindGroupLayout,
+				this.globalUniformBindGroupLayouts.depth,
+			],
+		});
 		const PBRRenderPipeline = this.device.createRenderPipeline({
 			label: "render pipeline",
-			layout: sceneDrawPipelineLayout,
+			layout: PBRPipelineLayout,
 			vertex: {
 				module: this.shaders.PBR,
 				entryPoint: "vs",
@@ -238,7 +269,7 @@ export default class Renderer {
 			fragment: {
 				module: this.shaders.PBR,
 				entryPoint: "fs",
-				targets: [{ format: "rgba16float" }],
+				targets: [{ format: "rgba16float" }, { format: "rgba16float" }],
 			},
 			primitive: {
 				topology: "triangle-list",
@@ -247,7 +278,7 @@ export default class Renderer {
 			depthStencil: {
 				depthWriteEnabled: false,
 				depthCompare: "equal",
-				format: "depth24plus",
+				format: "depth32float",
 			},
 			multisample: {
 				count: 4,
@@ -284,7 +315,7 @@ export default class Renderer {
 			},
 			multisample: {
 				count: 4,
-			}
+			},
 		});
 		this.pipelines = {
 			basic: basicRenderPipeline,
@@ -305,13 +336,13 @@ export default class Renderer {
 		});
 		this.globalUniformBindGroups = {
 			camera: cameraUniformBindGroup,
+			depth: null,
+			drawTexture: null,
 		};
 
 		// post processing quad buffers and sampler
 		{
-			const quadVertexData = new Float32Array([
-				-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0,
-			]);
+			const quadVertexData = new Float32Array([-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0]);
 			const quadVertexBuffer = this.device.createBuffer({
 				label: "post fx quad vertex buffer",
 				size: quadVertexData.byteLength,
@@ -324,12 +355,11 @@ export default class Renderer {
 			const sceneTextureSampler = this.device.createSampler({
 				magFilter: "linear",
 				minFilter: "linear",
-			})
+			});
 
 			this.postFXQuad = {
 				vertexBuffer: quadVertexBuffer,
 				sampler: sceneTextureSampler,
-				bindGroup: null,
 			};
 		}
 
@@ -347,7 +377,7 @@ export default class Renderer {
 		});
 	}
 
-	/** 
+	/**
 	 * Called upon initialization and change of the canvas size
 	 **/
 	private buildRenderPassDescriptors() {
@@ -356,10 +386,30 @@ export default class Renderer {
 			label: "scene depth texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 4,
-			format: "depth24plus",
+			format: "depth32float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 		const depthView = depthTexture.createView();
+
+		// the depth texture drawn to by the depth pass
+		const depthDrawTexture = this.device.createTexture({
+			label: "draw depth texture",
+			size: [this.canvas.width, this.canvas.height],
+			sampleCount: 4,
+			format: "r16float",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const depthDrawView = depthDrawTexture.createView();
+
+		// resolve depth texture to be able to sample in ssao
+		const depthResolveTexture = this.device.createTexture({
+			label: "resolve depth draw texture",
+			size: [this.canvas.width, this.canvas.height],
+			sampleCount: 1,
+			format: "r16float",
+			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const depthResolveView = depthResolveTexture.createView();
 
 		// scene draw color texture
 		const sceneDrawTexture = this.device.createTexture({
@@ -373,7 +423,7 @@ export default class Renderer {
 
 		// resolve texture for post-processing output
 		const sceneResolveTexture = this.device.createTexture({
-			label: "scene single-sample texture",
+			label: "scene single-sample resolve texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 1,
 			format: "rgba16float",
@@ -381,7 +431,27 @@ export default class Renderer {
 		});
 		const sceneResolveView = sceneResolveTexture.createView();
 
-		// screen ouptut color texture
+		// ssao output texture
+		const ssaoOutTexture = this.device.createTexture({
+			label: "ssao draw output texture",
+			size: [this.canvas.width, this.canvas.height],
+			sampleCount: 4,
+			format: "rgba16float", //make it r16float
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const ssaoOutView = ssaoOutTexture.createView();
+
+		// resolve texture for ssao output
+		const ssaoResolveTexture = this.device.createTexture({
+			label: "ssao single-sample resolve texture",
+			size: [this.canvas.width, this.canvas.height],
+			sampleCount: 1,
+			format: "rgba16float",
+			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const ssaoResolveView = ssaoResolveTexture.createView();
+
+		// screen postfx ouptut color texture
 		const screenOutputTexture = this.device.createTexture({
 			label: "post fx screen output texture",
 			size: [this.canvas.width, this.canvas.height],
@@ -391,8 +461,28 @@ export default class Renderer {
 		});
 		const screenOutputView = screenOutputTexture.createView();
 
+		// bind group for the depth texture
+		this.globalUniformBindGroups.depth = this.device.createBindGroup({
+			label: "depth texture bind group",
+			layout: this.globalUniformBindGroupLayouts.depth,
+			entries: [
+				{
+					binding: 0,
+					resource: depthResolveView,
+				},
+				{
+					binding: 1,
+					resource: this.device.createSampler({
+						magFilter: "linear",
+						minFilter: "linear",
+					}),
+				},
+			],
+		});
+
 		// bind group for the post processing textures
-		this.postFXQuad.bindGroup = this.device.createBindGroup({
+		this.globalUniformBindGroups.drawTexture = this.device.createBindGroup({
+			label: "post processing draw texture bind group",
 			layout: this.pipelines.postFX.getBindGroupLayout(0),
 			entries: [
 				{
@@ -401,15 +491,24 @@ export default class Renderer {
 				},
 				{
 					binding: 1,
-					resource: sceneResolveView,
-				}
-			]
-		})
+					resource: ssaoResolveView,
+					// resource: ssaoResolveView,
+				},
+			],
+		});
 
 		// render pass descriptors
 		const depthPassDescriptor: GPURenderPassDescriptor = {
 			label: "depth pass descriptor",
-			colorAttachments: [],
+			colorAttachments: [
+				{
+					clearValue: [0.0, 0.0, 0.0, 0.0],
+					loadOp: "clear",
+					storeOp: "store",
+					view: depthDrawView,
+					resolveTarget: depthResolveView,
+				},
+			],
 			depthStencilAttachment: {
 				view: depthView,
 				depthClearValue: 1.0,
@@ -427,6 +526,13 @@ export default class Renderer {
 					view: sceneDrawView,
 					resolveTarget: sceneResolveView,
 				},
+				{
+					clearValue: [0.0, 0.0, 0.0, 1.0],
+					loadOp: "clear",
+					storeOp: "store",
+					view: ssaoOutView,
+					resolveTarget: ssaoResolveView,
+				}
 			],
 			depthStencilAttachment: {
 				view: depthView,
@@ -443,9 +549,9 @@ export default class Renderer {
 					storeOp: "store",
 					view: screenOutputView,
 					resolveTarget: this.ctx.getCurrentTexture().createView(),
-				}
-			]
-		}
+				},
+			],
+		};
 
 		this.renderPassDescriptors = {
 			depthPass: depthPassDescriptor,
@@ -564,6 +670,7 @@ export default class Renderer {
 			const drawPass = encoder.beginRenderPass(this.renderPassDescriptors!.sceneDraw);
 			drawPass.setPipeline(this.pipelines.PBR);
 			drawPass.setBindGroup(0, this.globalUniformBindGroups.camera);
+			drawPass.setBindGroup(2, this.globalUniformBindGroups.depth);
 
 			for (const model of this.objects) {
 				drawPass.setBindGroup(1, model.transformUniformBindGroup);
@@ -578,8 +685,8 @@ export default class Renderer {
 			// post processing pass
 			const postFXPass = encoder.beginRenderPass(this.renderPassDescriptors!.postFX);
 			postFXPass.setPipeline(this.pipelines.postFX);
-			
-			postFXPass.setBindGroup(0, this.postFXQuad.bindGroup);
+
+			postFXPass.setBindGroup(0, this.globalUniformBindGroups.drawTexture);
 			postFXPass.setVertexBuffer(0, this.postFXQuad.vertexBuffer);
 			postFXPass.draw(5);
 			postFXPass.end();
