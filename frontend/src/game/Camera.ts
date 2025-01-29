@@ -16,7 +16,7 @@ export default class Camera {
 	public readonly projMatrixInverse = mat4.create();
 	public readonly viewProjMatrix = mat4.create();
 	public readonly rotProjMatrix = mat4.create();
-	private readonly viewMatrix = mat4.create();
+	public readonly viewMatrix = mat4.create();
 
 	constructor(canvas: HTMLCanvasElement) {
 		this.position[1] = 2.0;

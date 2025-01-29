@@ -1,5 +1,5 @@
 struct CameraData {
-    view_proj_matrix: mat4x4<f32>,
+    view_matrix: mat4x4<f32>,
     proj_matrix: mat4x4<f32>,
 }
 @group(0) @binding(0) var<uniform> u_global: CameraData;
@@ -19,6 +19,8 @@ struct SSAOData {
     kernel: array<vec3<f32>, 64>
 };
 @group(3) @binding(0) var<uniform> u_ssao: SSAOData;
+@group(3) @binding(2) var u_ssao_noise: texture_2d<f32>;
+@group(3) @binding(1) var u_ssao_noise_sampler: sampler;
 
 struct VertexIn {
     @location(0) vertex_xyzc: vec2<u32>,
@@ -32,7 +34,7 @@ struct VertexOut {
     @location(1) normal: vec3f,
     @location(2) uv: vec2f,
     @location(3) color: vec3f,
-    @location(4) clip_pos: vec4f,
+    @location(4) view_pos: vec4f,
 };
 
 struct FragmentOut {
@@ -46,7 +48,8 @@ fn vs(in: VertexIn) -> VertexOut {
     let y: f32 = f32(in.vertex_xyzc.x & 0xFFFFu) / 65535.0 - 0.5;
     let z: f32 = f32(in.vertex_xyzc.y >> 16u) / 65535.0 - 0.5;
     let world_pos: vec4f = u_transform.model_matrix * vec4f(vec3f(x, y, z) * u_transform.model_scale + u_transform.model_offset, 1.0);
-    let clip_pos: vec4f = u_global.view_proj_matrix * world_pos;
+    let view_pos: vec4f = u_global.view_matrix * world_pos;
+    let clip_pos: vec4f = u_global.proj_matrix * view_pos;
 
     let r: f32 = f32((in.vertex_xyzc.y >> 11u) & 0x1Fu) / 31.0;
     let g: f32 = f32((in.vertex_xyzc.y >> 5u) & 0x3Fu) / 63.0;
@@ -55,6 +58,7 @@ fn vs(in: VertexIn) -> VertexOut {
     let nx: f32 = f32(in.vertex_normal >> 22u) / 511.5 - 1.0;
     let ny: f32 = f32((in.vertex_normal >> 12u) & 0x3FFu) / 511.5 - 1.0;
     let nz: f32 = f32((in.vertex_normal >> 2u) & 0x3FFu) / 511.5 - 1.0;
+    // var normal_matrix: mat3x3<f32> = transpose(inverse(mat3x3<f32>(u_transform.model_matrix) ));
 
     let u: f32 = f32(in.vertex_uv >> 16u) / 65535.0;
     let v: f32 = f32(in.vertex_uv & 0xFFFFu) / 65535.0;
@@ -65,7 +69,7 @@ fn vs(in: VertexIn) -> VertexOut {
     out.normal = u_transform.normal_matrix * vec3f(nx, ny, nz);
     out.uv = vec2f(u, v);
     out.color = vec3f(r, g, b);
-    out.clip_pos = clip_pos;
+    out.view_pos = view_pos;
     return out;
 }
 
@@ -82,36 +86,43 @@ fn fs(in: VertexOut) -> FragmentOut {
     var color = lambert * sun_color.rgb * in.color;
     color = color * 0.5 + in.color * 0.5;
 
-    var screen_uv = in.clip_pos.xy / in.clip_pos.w;
-    screen_uv = screen_uv * 0.5 + 0.5;
-    screen_uv.y = 1.0 - screen_uv.y;
+    var view_pos = in.view_pos.xyz;
+    // screen_uv = screen_uv * 0.5 + 0.5;
+    // screen_uv.y = 1.0 - screen_uv.y;
 
     // SSAO
-    var random_vec: vec3f = vec3f(0.2, 0.1, 0.3);
+    var random_vec: vec3f = vec3f(0.2, 0.1, 0.3) * 0.5;
     var tangent: vec3f = normalize(random_vec - n * dot(random_vec, n));
     var bitangent: vec3f = cross(n, tangent);
     var tbn: mat3x3<f32> = mat3x3<f32>(tangent, bitangent, n);
     var occlusion: f32 = 0.0;
     for (var i: i32 = 0; i < 64; i++) {
         var sample_pos: vec3f = tbn * u_ssao.kernel[i];
-        sample_pos = sample_pos * 0.5 + 0.5;
+        sample_pos = sample_pos * 0.5 + view_pos;
         
         var offset: vec4f = vec4f(sample_pos, 1.0);
-        offset = u_global.view_proj_matrix * vec4f(in.world_pos + offset.xyz * 0.1, 1.0);
+        offset = u_global.proj_matrix * offset;
         offset = offset / offset.w;
         offset = offset * 0.5 + 0.5;
+        offset.y = 1.0 - offset.y;
 
         var sample_depth: f32 = textureSample(u_depth, u_depth_sampler, offset.xy).r;
-        var range_check: f32 = smoothstep(0.0, 1.0, 0.1 / abs(in.clip_pos.z - sample_depth));
-        if (sample_depth >= sample_pos.z - 0.0) {
-            occlusion += 1.0;
+        var range_check: f32 = smoothstep(0.0, 1.0, 0.1 / abs(view_pos.z - sample_depth));
+        if (sample_depth >= sample_pos.z + 0.01) {
+            occlusion += 1.0 * range_check;
         }
+        // occlusion += sample_pos.z / 64.0;
     }
     occlusion = 1.0 - (occlusion / f32(64));
 
     var out: FragmentOut;
     out.color = vec4f(color, 1.0);
-    // out.occlusion = textureSample(u_depth, u_depth_sampler, screen_uv).r * vec4f(1.0);
     out.occlusion = occlusion * vec4f(1.0);
+    // out.occlusion = view_pos.z * vec4f(1.0);
+
+    // var screen_pos: vec2f = (u_global.proj_matrix * in.view_pos).xy / (u_global.proj_matrix * in.view_pos).w;
+    // screen_pos = screen_pos * 0.5 + 0.5;
+    // screen_pos.y = 1.0 - screen_pos.y;
+    // out.occlusion = textureSample(u_depth, u_depth_sampler, screen_pos).r * vec4f(1.0);
     return out;
 }

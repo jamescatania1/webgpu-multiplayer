@@ -1,5 +1,6 @@
 import { vec3, type Vec3 } from "wgpu-matrix";
 import Transform from "./Transform";
+import type Camera from "./Camera";
 
 type ModelData = {
 	vertexBuffer: GPUBuffer;
@@ -37,9 +38,9 @@ export default class Model {
 	public roughness = 1.0;
 	public ao = 1.0;
 
-	constructor(device: GPUDevice, transformBindGroupLayout: GPUBindGroupLayout, modelData: ModelData) {
+	constructor(device: GPUDevice, camera: Camera, transformBindGroupLayout: GPUBindGroupLayout, modelData: ModelData) {
 		this.modelData = modelData;
-		this.transform = new Transform();
+		this.transform = new Transform(camera);
 		this.transformBufferData = new Float32Array((16 + 12 + 4) * 4);
 
 		// uniform buffer and bind group for the transform

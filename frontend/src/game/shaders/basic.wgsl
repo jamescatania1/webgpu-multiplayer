@@ -1,5 +1,5 @@
 struct GlobalData {
-    view_proj_matrix: mat4x4<f32>,
+    view_matrix: mat4x4<f32>,
     proj_matrix: mat4x4<f32>,
 }
 @group(0) @binding(0) var<uniform> u_global: GlobalData;
@@ -23,7 +23,7 @@ struct VertexOut {
 @vertex 
 fn vs(in: VertexIn) -> VertexOut {
     var out: VertexOut;
-    out.pos = u_global.view_proj_matrix * u_model.model_matrix * vec4f(in.pos, 1.0);
+    out.pos = u_global.proj_matrix * u_global.view_matrix * u_model.model_matrix * vec4f(in.pos, 1.0);
     out.color = vec4f(in.color, 1.0);
     return out;
 }

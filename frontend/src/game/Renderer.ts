@@ -109,6 +109,16 @@ export default class Renderer {
 					visibility: GPUShaderStage.FRAGMENT,
 					buffer: {},
 				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.FRAGMENT,
+					texture: {},
+				},
+				{
+					binding: 2,
+					visibility: GPUShaderStage.FRAGMENT,
+					sampler: {},
+				}
 			],
 		});
 		this.globalUniformBindGroupLayouts = {
@@ -366,6 +376,12 @@ export default class Renderer {
 		}
 		new Float32Array(ssaoUniformBuffer.getMappedRange()).set(ssaoBufferData);
 		ssaoUniformBuffer.unmap();
+		const ssaoNoiseTexture = this.device.createTexture({
+			label: "ssao noise texture",
+			size: [4, 4],
+			format: "rgba32float",
+			usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.,
+		});
 		const ssaoBindGroup = this.device.createBindGroup({
 			layout: ssaoBindGroupLayout,
 			entries: [
@@ -373,6 +389,10 @@ export default class Renderer {
 					binding: 0,
 					resource: { buffer: ssaoUniformBuffer, offset: 0, size: ssaoSampleCount * 4 * 4 },
 				},
+				{
+					binding: 1,
+					resource: {}
+				}
 			],
 		});
 		this.globalUniformBindGroups = {
@@ -411,11 +431,11 @@ export default class Renderer {
 
 		const numCubes = 10;
 		for (let i = 0; i < numCubes; i++) {
-			const cube = new Cube(this.device, basicModelBindGroupLayout);
+			const cube = new Cube(this.device, this.camera, basicModelBindGroupLayout);
 			this.cubes.push(cube);
 		}
 		loadBOBJ(this.device, "/scene.bobj").then((data) => {
-			const model = new Model(this.device, transformBindGroupLayout, data);
+			const model = new Model(this.device, this.camera, transformBindGroupLayout, data);
 			this.objects.push(model);
 		});
 	}
@@ -667,9 +687,9 @@ export default class Renderer {
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.camera,
 				0,
-				this.camera.viewProjMatrix.buffer,
-				this.camera.viewProjMatrix.byteOffset,
-				this.camera.viewProjMatrix.byteLength,
+				this.camera.viewMatrix.buffer,
+				this.camera.viewMatrix.byteOffset,
+				this.camera.viewMatrix.byteLength,
 			);
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.camera,
@@ -680,7 +700,7 @@ export default class Renderer {
 			);
 
 			for (let i = 0; i < this.cubes.length; i++) {
-				this.cubes[i].update(this.device, i * 2);
+				this.cubes[i].update(this.device, this.camera, i * 2);
 			}
 		}
 
@@ -762,7 +782,7 @@ class Cube {
 		transform: Transform;
 	};
 
-	constructor(device: GPUDevice, basicModelBindGroupLayout: GPUBindGroupLayout) {
+	constructor(device: GPUDevice, camera: Camera, basicModelBindGroupLayout: GPUBindGroupLayout) {
 		// vertex buffer for cube
 		// prettier-ignore
 		const vertexData = new Float32Array([
@@ -835,15 +855,15 @@ class Cube {
 			indexCount: indexData.length,
 			uniformBuffer: uniformBuffer,
 			uniformBindGroup: uniformBindGroup,
-			transform: new Transform(),
+			transform: new Transform(camera),
 		};
 	}
 
-	public update(device: GPUDevice, yPos: number) {
+	public update(device: GPUDevice, camera: Camera, yPos: number) {
 		const timestamp = performance.now() / 1000 + yPos * 0.1;
 		this.modelData.transform.rotation.set([Math.sin(timestamp), Math.cos(timestamp), 0]);
 		this.modelData.transform.position[1] = yPos;
-		this.modelData.transform.update();
+		this.modelData.transform.update(camera);
 		device.queue.writeBuffer(
 			this.modelData.uniformBuffer,
 			0,

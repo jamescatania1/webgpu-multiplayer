@@ -2,7 +2,7 @@ override near = 0.1;
 override far = 300.0;
 
 struct CameraData {
-    view_proj_matrix: mat4x4<f32>,
+    view_matrix: mat4x4<f32>,
     proj_matrix: mat4x4<f32>,
 }
 @group(0) @binding(0) var<uniform> u_global: CameraData;
@@ -21,7 +21,7 @@ struct VertexIn {
 
 struct VertexOut {
     @builtin(position) pos: vec4f,
-    // @location(0) world_pos: vec3f,
+    @location(0) view_pos: vec4f,
 };
 
 @vertex 
@@ -30,9 +30,12 @@ fn vs(in: VertexIn) -> VertexOut {
     let y: f32 = f32(in.vertex_xyzc.x & 0xFFFFu) / 65535.0 - 0.5;
     let z: f32 = f32(in.vertex_xyzc.y >> 16u) / 65535.0 - 0.5;
     let world_pos: vec4f = u_transform.model_matrix * vec4f(vec3f(x, y, z) * u_transform.model_scale + u_transform.model_offset, 1.0);
+    let view_pos: vec4f = u_global.view_matrix * world_pos;
+    let clip_pos: vec4f = u_global.proj_matrix * view_pos;
 
     var out: VertexOut;
-    out.pos = u_global.view_proj_matrix * world_pos;
+    out.pos = clip_pos;
+    out.view_pos = view_pos;
     return out;
 }
 
@@ -42,5 +45,6 @@ fn linearize_depth(depth: f32) -> f32 {
 
 @fragment 
 fn fs(in: VertexOut) -> @location(0) vec4f {
-    return vec4f(linearize_depth(in.pos.z) / far, 1.0, 1.0, 1.0);
+    // return vec4f(linearize_depth(in.pos.z) / far, 1.0, 1.0, 1.0);
+    return vec4f(in.view_pos.z, 1.0, 1.0, 1.0);
 }
