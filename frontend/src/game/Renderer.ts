@@ -9,7 +9,14 @@ import Model, { loadBOBJ } from "./Model";
 const MAX_VEL = 1.0;
 const ACCEL = 0.01;
 const MOUSE_SENSITIVITY = 2.0;
-const SSAO_KERNEL_SIZE = 32;
+export const ssaoSettings = {
+	sampleCount: 64,
+	radius: 0.3,
+	bias: 0.05,
+	kernelDotCutOff: 0.185,
+	noiseTextureSize: 32,
+	noiseScale: 1000.0,
+};
 
 export default class Renderer {
 	private readonly canvas: HTMLCanvasElement;
@@ -99,6 +106,11 @@ export default class Renderer {
 					visibility: GPUShaderStage.FRAGMENT,
 					sampler: {},
 				},
+				{ // screen size, can move elsewhere later
+					binding: 2,
+					visibility: GPUShaderStage.FRAGMENT,
+					buffer: {},
+				}
 			],
 		});
 		const ssaoBindGroupLayout = this.device.createBindGroupLayout({
@@ -118,6 +130,11 @@ export default class Renderer {
 					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
 					sampler: {},
+				},
+				{ // lighting data
+					binding: 3,
+					visibility: GPUShaderStage.FRAGMENT,
+					buffer: {},
 				}
 			],
 		});
@@ -283,7 +300,13 @@ export default class Renderer {
 			fragment: {
 				module: this.shaders.PBR,
 				entryPoint: "fs",
-				targets: [{ format: "rgba16float" }, { format: "rgba16float" }],
+				targets: [{ format: "rgba16float" }, { format: "r16float" }],
+				constants: {
+					ssao_samples: ssaoSettings.sampleCount,
+					ssao_radius: ssaoSettings.radius,
+					ssao_bias: ssaoSettings.bias,
+					ssao_noise_scale: ssaoSettings.noiseScale,
+				},
 			},
 			primitive: {
 				topology: "triangle-list",
@@ -341,7 +364,7 @@ export default class Renderer {
 		// camera uniform buffer and bind group
 		const cameraUniformBuffer = this.device.createBuffer({
 			label: "camera uniform buffer",
-			size: 32 * 4,
+			size: 36 * 4,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
 		this.uniformBuffers = {
@@ -352,49 +375,106 @@ export default class Renderer {
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: this.uniformBuffers.camera, offset: 0, size: 32 * 4 },
+					resource: { buffer: this.uniformBuffers.camera, offset: 0, size: cameraUniformBuffer.size },
 				},
 			],
 		});
 
 		// ssao uniform buffer and bind group
-		const ssaoSampleCount = 64;
 		const ssaoUniformBuffer = this.device.createBuffer({
 			label: "ssao uniform buffer",
-			size: ssaoSampleCount * 4 * 4,
+			size: ssaoSettings.sampleCount * 4 * 4,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			mappedAtCreation: true,
 		});
-		const ssaoBufferData = new Float32Array(ssaoSampleCount * 3);
-		for (let i = 0; i < ssaoSampleCount; i++) {
-			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random());
+		const ssaoBufferData = new Float32Array(ssaoSettings.sampleCount * 4).fill(0);
+		let i = 0;
+		while (i < ssaoSettings.sampleCount) {
+			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random() * 0.75 + 0.25);
 			vec3.normalize(sample, sample);
-			let scale = i / ssaoSampleCount;
+			let scale = i / ssaoSettings.sampleCount;
 			scale = 0.1 + scale * scale * (1.0 - 0.1);
 			vec3.scale(sample, scale, sample);
-			ssaoBufferData.set(sample, i * 3);
+
+			if (vec3.normalize(sample)[2] < ssaoSettings.kernelDotCutOff) {
+				continue;
+			}
+
+			ssaoBufferData.set(sample, i * 4);
+			i++;
 		}
 		new Float32Array(ssaoUniformBuffer.getMappedRange()).set(ssaoBufferData);
 		ssaoUniformBuffer.unmap();
 		const ssaoNoiseTexture = this.device.createTexture({
 			label: "ssao noise texture",
-			size: [4, 4],
-			format: "rgba32float",
-			usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.,
+			size: [ssaoSettings.noiseTextureSize, ssaoSettings.noiseTextureSize],
+			format: "rgba8unorm",
+			usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+			sampleCount: 1,
+			textureBindingViewDimension: "2d",
 		});
+		const ssaoNoiseData = new Uint8Array(4 * ssaoSettings.noiseTextureSize * ssaoSettings.noiseTextureSize);
+		for (let i = 0; i < ssaoNoiseData.length; i++) {
+			ssaoNoiseData[i] = Math.random() * 255;
+		}
+		this.device.queue.writeTexture(
+			{
+				texture: ssaoNoiseTexture,
+				mipLevel: 0,
+				origin: { x: 0, y: 0, z: 0 },
+			},
+			ssaoNoiseData,
+			{ bytesPerRow: 4 * ssaoSettings.noiseTextureSize, rowsPerImage: ssaoSettings.noiseTextureSize },
+			{ width: ssaoSettings.noiseTextureSize, height: ssaoSettings.noiseTextureSize },
+		);
+		const ssaoNoiseSampler = this.device.createSampler({
+			minFilter: "nearest",
+			magFilter: "nearest",
+			addressModeU: "repeat",
+			addressModeV: "repeat",
+		});
+
+		// lighting uniform buffer
+		const lightingUniformBuffer = this.device.createBuffer({
+			label: "lighting uniform buffer",
+			size: 2 * 4 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		const sunDirection = vec3.fromValues(20, 50, 17);
+		vec3.normalize(sunDirection, sunDirection);
+		const sunColor = vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0);
+		const sunIntensity = 1.0;
+		const lightingBufferData = new Float32Array(2 * 4);
+		lightingBufferData.set(sunDirection, 0);
+		lightingBufferData.set(sunColor, 4);
+		lightingBufferData[7] = sunIntensity;
+		new Float32Array(lightingUniformBuffer.getMappedRange()).set(lightingBufferData);
+		lightingUniformBuffer.unmap();
+
 		const ssaoBindGroup = this.device.createBindGroup({
+			label: "ssao bind group",
 			layout: ssaoBindGroupLayout,
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: ssaoUniformBuffer, offset: 0, size: ssaoSampleCount * 4 * 4 },
+					resource: { buffer: ssaoUniformBuffer, offset: 0, size: ssaoSettings.sampleCount * 4 * 4 },
 				},
 				{
 					binding: 1,
-					resource: {}
+					resource: ssaoNoiseTexture.createView(),
+				},
+				{
+					binding: 2,
+					resource: ssaoNoiseSampler,
+				},
+				{
+					binding: 3,
+					resource: { buffer: lightingUniformBuffer, offset: 0, size: 2 * 4 * 4 },
 				}
 			],
 		});
+
 		this.globalUniformBindGroups = {
 			camera: cameraUniformBindGroup,
 			ssao: ssaoBindGroup,
@@ -499,7 +579,7 @@ export default class Renderer {
 			label: "ssao draw output texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 4,
-			format: "rgba16float", //make it r16float
+			format: "r16float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 		const ssaoOutView = ssaoOutTexture.createView();
@@ -509,7 +589,7 @@ export default class Renderer {
 			label: "ssao single-sample resolve texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 1,
-			format: "rgba16float",
+			format: "r16float",
 			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 		const ssaoResolveView = ssaoResolveTexture.createView();
@@ -523,6 +603,14 @@ export default class Renderer {
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 		const screenOutputView = screenOutputTexture.createView();
+
+		const depthUniformScreenSizeBuffer = this.device.createBuffer({
+			size: 2 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		new Float32Array(depthUniformScreenSizeBuffer.getMappedRange()).set([this.canvas.width, this.canvas.height]);
+		depthUniformScreenSizeBuffer.unmap();
 
 		// bind group for the depth texture
 		this.globalUniformBindGroups.depth = this.device.createBindGroup({
@@ -540,6 +628,14 @@ export default class Renderer {
 						minFilter: "linear",
 					}),
 				},
+				{
+					binding: 2,
+					resource: {
+						buffer: depthUniformScreenSizeBuffer,
+						offset: 0,
+						size: 2 * 4,
+					},
+				}
 			],
 		});
 
@@ -554,8 +650,7 @@ export default class Renderer {
 				},
 				{
 					binding: 1,
-					resource: ssaoResolveView,
-					// resource: ssaoResolveView,
+					resource: sceneResolveView,
 				},
 			],
 		});
@@ -698,6 +793,13 @@ export default class Renderer {
 				this.camera.projMatrix.byteOffset,
 				this.camera.projMatrix.byteLength,
 			);
+			this.device.queue.writeBuffer(
+				this.uniformBuffers.camera,
+				32 * 4,
+				this.camera.position.buffer,
+				this.camera.position.byteOffset,
+				this.camera.position.byteLength,
+			)
 
 			for (let i = 0; i < this.cubes.length; i++) {
 				this.cubes[i].update(this.device, this.camera, i * 2);
