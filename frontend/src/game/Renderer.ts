@@ -23,10 +23,12 @@ export default class Renderer {
 	private globalUniformBindGroupLayouts: {
 		camera: GPUBindGroupLayout;
 		depth: GPUBindGroupLayout;
+		ssao: GPUBindGroupLayout;
 	};
 	private globalUniformBindGroups: {
 		camera: GPUBindGroup;
 		depth: GPUBindGroup | null;
+		ssao: GPUBindGroup;
 		drawTexture: GPUBindGroup | null;
 	};
 	private readonly pipelines: {
@@ -73,23 +75,13 @@ export default class Renderer {
 			format: this.presentationFormat,
 		});
 
-		// camera data uniform buffer
-		const cameraUniformBuffer = this.device.createBuffer({
-			label: "camera uniform buffer",
-			size: 16 * 4,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-		});
-		this.uniformBuffers = {
-			camera: cameraUniformBuffer,
-		};
-
 		// uniform bind group layouts
 		const cameraBindGroupLayout = this.device.createBindGroupLayout({
 			label: "camera data bind group layout",
 			entries: [
 				{
 					binding: 0,
-					visibility: GPUShaderStage.VERTEX,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: {},
 				},
 			],
@@ -109,9 +101,20 @@ export default class Renderer {
 				},
 			],
 		});
+		const ssaoBindGroupLayout = this.device.createBindGroupLayout({
+			label: "ssao bind group layout",
+			entries: [
+				{
+					binding: 0,
+					visibility: GPUShaderStage.FRAGMENT,
+					buffer: {},
+				},
+			],
+		});
 		this.globalUniformBindGroupLayouts = {
 			camera: cameraBindGroupLayout,
 			depth: depthBindGroupLayout,
+			ssao: ssaoBindGroupLayout,
 		};
 		const transformBindGroupLayout = this.device.createBindGroupLayout({
 			label: "transform bind group layout",
@@ -231,6 +234,7 @@ export default class Renderer {
 				this.globalUniformBindGroupLayouts.camera,
 				transformBindGroupLayout,
 				this.globalUniformBindGroupLayouts.depth,
+				this.globalUniformBindGroupLayouts.ssao,
 			],
 		});
 		const PBRRenderPipeline = this.device.createRenderPipeline({
@@ -324,18 +328,57 @@ export default class Renderer {
 			postFX: postFXPipeline,
 		};
 
-		// global uniform bind groups
+		// camera uniform buffer and bind group
+		const cameraUniformBuffer = this.device.createBuffer({
+			label: "camera uniform buffer",
+			size: 32 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+		this.uniformBuffers = {
+			camera: cameraUniformBuffer,
+		};
 		const cameraUniformBindGroup = this.device.createBindGroup({
 			layout: cameraBindGroupLayout,
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: this.uniformBuffers.camera, offset: 0, size: 16 * 4 },
+					resource: { buffer: this.uniformBuffers.camera, offset: 0, size: 32 * 4 },
+				},
+			],
+		});
+
+		// ssao uniform buffer and bind group
+		const ssaoSampleCount = 64;
+		const ssaoUniformBuffer = this.device.createBuffer({
+			label: "ssao uniform buffer",
+			size: ssaoSampleCount * 4 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		const ssaoBufferData = new Float32Array(ssaoSampleCount * 3);
+		for (let i = 0; i < ssaoSampleCount; i++) {
+			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random());
+			vec3.normalize(sample, sample);
+			let scale = i / ssaoSampleCount;
+			scale = 0.1 + scale * scale * (1.0 - 0.1);
+			vec3.scale(sample, scale, sample);
+			ssaoBufferData.set(sample, i * 3);
+		}
+		new Float32Array(ssaoUniformBuffer.getMappedRange()).set(ssaoBufferData);
+		ssaoUniformBuffer.unmap();
+		const ssaoBindGroup = this.device.createBindGroup({
+			layout: ssaoBindGroupLayout,
+			entries: [
+				{
+					binding: 0,
+					resource: { buffer: ssaoUniformBuffer, offset: 0, size: ssaoSampleCount * 4 * 4 },
 				},
 			],
 		});
 		this.globalUniformBindGroups = {
 			camera: cameraUniformBindGroup,
+			ssao: ssaoBindGroup,
+			// the null bind groups depend on the screen size, and are created in buildRenderPassDescriptors
 			depth: null,
 			drawTexture: null,
 		};
@@ -532,7 +575,7 @@ export default class Renderer {
 					storeOp: "store",
 					view: ssaoOutView,
 					resolveTarget: ssaoResolveView,
-				}
+				},
 			],
 			depthStencilAttachment: {
 				view: depthView,
@@ -628,6 +671,13 @@ export default class Renderer {
 				this.camera.viewProjMatrix.byteOffset,
 				this.camera.viewProjMatrix.byteLength,
 			);
+			this.device.queue.writeBuffer(
+				this.uniformBuffers.camera,
+				16 * 4,
+				this.camera.projMatrix.buffer,
+				this.camera.projMatrix.byteOffset,
+				this.camera.projMatrix.byteLength,
+			);
 
 			for (let i = 0; i < this.cubes.length; i++) {
 				this.cubes[i].update(this.device, i * 2);
@@ -671,6 +721,7 @@ export default class Renderer {
 			drawPass.setPipeline(this.pipelines.PBR);
 			drawPass.setBindGroup(0, this.globalUniformBindGroups.camera);
 			drawPass.setBindGroup(2, this.globalUniformBindGroups.depth);
+			drawPass.setBindGroup(3, this.globalUniformBindGroups.ssao);
 
 			for (const model of this.objects) {
 				drawPass.setBindGroup(1, model.transformUniformBindGroup);

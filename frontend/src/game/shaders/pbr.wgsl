@@ -1,5 +1,6 @@
 struct CameraData {
     view_proj_matrix: mat4x4<f32>,
+    proj_matrix: mat4x4<f32>,
 }
 @group(0) @binding(0) var<uniform> u_global: CameraData;
 
@@ -11,15 +12,19 @@ struct TransformData {
 }
 @group(1) @binding(0) var<uniform> u_transform: TransformData;
 
-
 @group(2) @binding(0) var u_depth: texture_2d<f32>;
 @group(2) @binding(1) var u_depth_sampler: sampler;
+
+struct SSAOData {
+    kernel: array<vec3<f32>, 64>
+};
+@group(3) @binding(0) var<uniform> u_ssao: SSAOData;
 
 struct VertexIn {
     @location(0) vertex_xyzc: vec2<u32>,
     @location(1) vertex_normal: u32,
     @location(2) vertex_uv: u32,
-}
+};
 
 struct VertexOut {
     @builtin(position) pos: vec4f,
@@ -81,8 +86,32 @@ fn fs(in: VertexOut) -> FragmentOut {
     screen_uv = screen_uv * 0.5 + 0.5;
     screen_uv.y = 1.0 - screen_uv.y;
 
+    // SSAO
+    var random_vec: vec3f = vec3f(0.2, 0.1, 0.3);
+    var tangent: vec3f = normalize(random_vec - n * dot(random_vec, n));
+    var bitangent: vec3f = cross(n, tangent);
+    var tbn: mat3x3<f32> = mat3x3<f32>(tangent, bitangent, n);
+    var occlusion: f32 = 0.0;
+    for (var i: i32 = 0; i < 64; i++) {
+        var sample_pos: vec3f = tbn * u_ssao.kernel[i];
+        sample_pos = sample_pos * 0.5 + 0.5;
+        
+        var offset: vec4f = vec4f(sample_pos, 1.0);
+        offset = u_global.view_proj_matrix * vec4f(in.world_pos + offset.xyz * 0.1, 1.0);
+        offset = offset / offset.w;
+        offset = offset * 0.5 + 0.5;
+
+        var sample_depth: f32 = textureSample(u_depth, u_depth_sampler, offset.xy).r;
+        var range_check: f32 = smoothstep(0.0, 1.0, 0.1 / abs(in.clip_pos.z - sample_depth));
+        if (sample_depth >= sample_pos.z - 0.0) {
+            occlusion += 1.0;
+        }
+    }
+    occlusion = 1.0 - (occlusion / f32(64));
+
     var out: FragmentOut;
     out.color = vec4f(color, 1.0);
-    out.occlusion = textureSample(u_depth, u_depth_sampler, screen_uv).r * vec4f(1.0);
+    // out.occlusion = textureSample(u_depth, u_depth_sampler, screen_uv).r * vec4f(1.0);
+    out.occlusion = occlusion * vec4f(1.0);
     return out;
 }

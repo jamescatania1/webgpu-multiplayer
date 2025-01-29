@@ -3,6 +3,7 @@ override far = 300.0;
 
 struct CameraData {
     view_proj_matrix: mat4x4<f32>,
+    proj_matrix: mat4x4<f32>,
 }
 @group(0) @binding(0) var<uniform> u_global: CameraData;
 
