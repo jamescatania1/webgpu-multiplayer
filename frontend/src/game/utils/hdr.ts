@@ -88,7 +88,7 @@ const toHalf = (function () {
 })();
 
 
-function rgbeToRGB16(rgbe: Uint8Array, out: Uint16Array) {
+function rgbeToRGBA16(rgbe: Uint8Array, out: Uint16Array) {
 	if (rgbe[3] === 0) {
         return;
 	}
@@ -96,6 +96,7 @@ function rgbeToRGB16(rgbe: Uint8Array, out: Uint16Array) {
     out[0] = toHalf(rgbe[0] * f1);
     out[1] = toHalf(rgbe[1] * f1);
     out[2] = toHalf(rgbe[2] * f1);
+	out[3] = 1.0;
 }
 
 function read_hdr(uint8: Uint8Array): HDRData {
@@ -121,15 +122,15 @@ function read_hdr(uint8: Uint8Array): HDRData {
 	let c2: number = uint8[pos + 1];
 	let len: number = uint8[pos + 2];
 
-	const data = new Uint16Array(width * height * 3);
+	const data = new Uint16Array(width * height * 4);
 	if (c1 !== 2 || c2 !== 2 || !!(len & 0x80)) {
 		// not run-length encoded
 		for (j = 0; j < height; ++j) {
 			for (i = 0; i < width; ++i) {
 				const rgbe = uint8.subarray(pos, pos + 4);
 				pos += 4;
-				const start = (j * width + i) * 3;
-				rgbeToRGB16(rgbe, data.subarray(start, start + 3));
+				const start = (j * width + i) * 4;
+				rgbeToRGBA16(rgbe, data.subarray(start, start + 4));
 			}
 		}
 	} else {
@@ -182,7 +183,7 @@ function read_hdr(uint8: Uint8Array): HDRData {
 			}
 
 			for (let i = 0; i < width; i++) {
-				rgbeToRGB16(scanline.subarray(i * 4), data.subarray((j * width + i) * 3));
+				rgbeToRGBA16(scanline.subarray(i * 4), data.subarray((j * width + i) * 4));
 			}
 		}
 	}

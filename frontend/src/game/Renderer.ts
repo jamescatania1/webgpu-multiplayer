@@ -5,18 +5,22 @@ import type { RenderContext } from "./Game";
 import { loadShaders, type Shaders } from "./Shaders";
 import Transform from "./Transform";
 import Model, { loadBOBJ } from "./Model";
+import Sky from "./Sky";
 
 const MAX_VEL = 1.0;
 const ACCEL = 0.01;
 const MOUSE_SENSITIVITY = 2.0;
 export const ssaoSettings = {
 	sampleCount: 64,
-	radius: 0.3,
+	radius: 0.4,
 	bias: 0.05,
-	kernelDotCutOff: 0.185,
+	kernelDotCutOff: 0.025,
 	noiseTextureSize: 32,
 	noiseScale: 1000.0,
 };
+export const skySettings = {
+
+}
 
 export default class Renderer {
 	private readonly canvas: HTMLCanvasElement;
@@ -81,6 +85,8 @@ export default class Renderer {
 			device: this.device,
 			format: this.presentationFormat,
 		});
+
+		const sky = new Sky(this.device, this.camera, this.shaders);
 
 		// uniform bind group layouts
 		const cameraBindGroupLayout = this.device.createBindGroupLayout({
@@ -390,7 +396,7 @@ export default class Renderer {
 		const ssaoBufferData = new Float32Array(ssaoSettings.sampleCount * 4).fill(0);
 		let i = 0;
 		while (i < ssaoSettings.sampleCount) {
-			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random() * 0.75 + 0.25);
+			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random());
 			vec3.normalize(sample, sample);
 			let scale = i / ssaoSettings.sampleCount;
 			scale = 0.1 + scale * scale * (1.0 - 0.1);

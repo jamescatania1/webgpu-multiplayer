@@ -2,6 +2,8 @@ import { default as basicShaderSource } from "./shaders/basic.wgsl";
 import { default as PBRShaderSource } from "./shaders/pbr.wgsl";
 import { default as depthShaderSource } from "./shaders/depth.wgsl";
 import { default as postFXShaderSource } from "./shaders/post_fx.wgsl";
+import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
+import { default as prefilterGeneratorSource } from "./shaders/prefilter_gen.wgsl";
 import { ssaoSettings } from "./Renderer";
 
 export type Shaders = {
@@ -9,6 +11,8 @@ export type Shaders = {
 	PBR: GPUShaderModule;
 	depth: GPUShaderModule;
 	postFX: GPUShaderModule;
+	cubemapGenerator: GPUShaderModule;
+	prefilterGenerator: GPUShaderModule;
 };
 
 type ShaderLoaderDescriptor = {
@@ -22,7 +26,6 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "cube shader",
 		code: basicShaderSource,
 	});
-
 	const PBR = loadShader(device, {
 		label: "pbr shader",
 		code: PBRShaderSource,
@@ -30,7 +33,6 @@ export function loadShaders(device: GPUDevice): Shaders {
 			"ssao_samples": Math.round(ssaoSettings.sampleCount).toString(),
 		},
 	});
-
 	const depth = loadShader(device, {
 		label: "depth prepass shader",
 		code: depthShaderSource,
@@ -39,12 +41,22 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "post processing shader",
 		code: postFXShaderSource,
 	});
+	const cubemapGenerator = loadShader(device, {
+		label: "cubemap generator compute shader",
+		code: cubemapGeneratorSource,
+	});
+	const prefilterGenerator = loadShader(device, {
+		label: "prefilter map generator compute shader",
+		code: prefilterGeneratorSource,
+	});
 
 	return {
 		basic: basic,
 		PBR: PBR,
 		depth: depth,
 		postFX: postFX,
+		cubemapGenerator: cubemapGenerator,
+		prefilterGenerator: prefilterGenerator,
 	};
 }
 

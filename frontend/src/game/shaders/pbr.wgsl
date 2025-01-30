@@ -173,7 +173,7 @@ fn fs(in: VertexOut) -> FragmentOut {
     // SSAO
     let occlusion = ssao(in.view_pos.xyz, in.view_normal, in.vertex_pos_hash, in.pos.z);
 
-    var color: vec3f = vec3f(1.0) * 0.4 * occlusion + light;
+    var color: vec3f = vec3f(1.0) * occlusion + light;
 
     var out: FragmentOut;
     out.color = vec4f(color, 1.0);
