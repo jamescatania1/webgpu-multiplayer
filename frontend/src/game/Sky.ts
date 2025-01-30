@@ -18,10 +18,139 @@ const BRDF_LUT_RESOLUTION = 512;
 
 let a: any[] = [];
 
+type SkyboxRenderData = {
+	pipeline: GPURenderPipeline;
+	vertexBuffer: GPUBuffer;
+	indexBuffer: GPUBuffer;
+	cameraUniformBuffer: GPUBuffer;
+	cameraBindGroup: GPUBindGroup;
+	textureBindGroup: GPUBindGroup;
+};
+
 export default class Sky {
-	public loaded = false;
+	public skyboxRenderData: SkyboxRenderData | null = null;
 
 	private readonly camera: Camera;
+
+	private createSkyboxRenderData(device: GPUDevice, shaders: Shaders, skybox: GPUTexture): SkyboxRenderData {
+		const pipeline = device.createRenderPipeline({
+			label: "skybox scene view render pipeline",
+			layout: "auto",
+			vertex: {
+				module: shaders.skybox,
+				entryPoint: "vs",
+				buffers: [
+					{
+						arrayStride: 3 * 4,
+						attributes: [
+							{
+								shaderLocation: 0,
+								offset: 0,
+								format: "float32x3",
+							},
+						],
+					},
+				],
+			},
+			fragment: {
+				module: shaders.skybox,
+				entryPoint: "fs",
+				targets: [{ format: "rgba16float" }, { format: "r16float" }],
+			},
+			primitive: {
+				topology: "triangle-list",
+				cullMode: "none",
+			},
+			depthStencil: {
+				depthWriteEnabled: false,
+				depthCompare: "less-equal",
+				format: "depth32float",
+			},
+			multisample: {
+				count: 4,
+			},
+		});
+
+		const cameraUniformBuffer = device.createBuffer({
+			size: 16 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+		const cameraBindGroup = device.createBindGroup({
+			label: "skybox camera uniform bind group",
+			layout: pipeline.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: {
+						buffer: cameraUniformBuffer,
+						size: 16 * 4,
+						offset: 0,
+					},
+				},
+			],
+		});
+
+		const skyboxSampler = device.createSampler({
+			minFilter: "linear",
+			magFilter: "linear",
+		});
+		const textureBindGroup = device.createBindGroup({
+			label: "skybox texture bind group",
+			layout: pipeline.getBindGroupLayout(1),
+			entries: [
+				{
+					binding: 0,
+					resource: skybox.createView({
+						dimension: "cube",
+					}),
+				},
+				{
+					binding: 1,
+					resource: skyboxSampler,
+				},
+			],
+		});
+
+		// prettier-ignore
+		const cubeVertexData = new Float32Array([
+			-1.0, -1.0, -1.0,   1.0, -1.0, -1.0, 
+			1.0, 1.0, -1.0,     -1.0, 1.0, -1.0, 
+			-1.0, -1.0, 1.0,    1.0, -1.0, 1.0,
+			1.0, 1.0, 1.0,      -1.0, 1.0, 1.0
+		]);
+		const cubeVertexBuffer = device.createBuffer({
+			label: "skybox cube vertex buffer",
+			size: cubeVertexData.byteLength,
+			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		new Float32Array(cubeVertexBuffer.getMappedRange()).set(cubeVertexData);
+		cubeVertexBuffer.unmap();
+
+		// prettier-ignore
+		const cubeIndexData = new Uint16Array([
+			0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 
+			0, 1, 5, 0, 5, 4, 2, 3, 7, 2, 7, 6, 
+			1, 2, 6, 1, 6, 5, 0, 7, 3, 0, 4, 7,
+		]);
+		const cubeIndexBuffer = device.createBuffer({
+			label: "skybox cube index buffer",
+			size: cubeIndexData.byteLength,
+			usage: GPUBufferUsage.INDEX,
+			mappedAtCreation: true,
+		});
+		new Uint16Array(cubeIndexBuffer.getMappedRange()).set(cubeIndexData);
+		cubeIndexBuffer.unmap();
+
+		return {
+			pipeline: pipeline,
+			vertexBuffer: cubeVertexBuffer,
+			indexBuffer: cubeIndexBuffer,
+			cameraUniformBuffer: cameraUniformBuffer,
+			cameraBindGroup: cameraBindGroup,
+			textureBindGroup: textureBindGroup,
+		};
+	}
 
 	constructor(device: GPUDevice, camera: Camera, shaders: Shaders) {
 		this.camera = camera;
@@ -56,7 +185,8 @@ export default class Sky {
 		// gl.bindVertexArray(null);
 
 		// load the skybox hdr texture
-		loadHDR("/sky_studio.hdr").then((hdr) => {
+		loadHDR("/sky_indoor.hdr").then((hdr) => {
+			// generate the skybox cubemap from the equirrectangular hdr
 			const cubemapGeneratorPipeline = device.createComputePipeline({
 				label: "skybox cubemap generator compute pipeline",
 				layout: "auto",
@@ -65,7 +195,6 @@ export default class Sky {
 					entryPoint: "compute_skybox",
 				},
 			});
-
 			const skyboxRectangleTexture = device.createTexture({
 				label: "skbox equirrectangular texture",
 				size: [hdr.width, hdr.height],
@@ -78,8 +207,8 @@ export default class Sky {
 			const skyboxRectangleSampler = device.createSampler({
 				minFilter: "linear",
 				magFilter: "linear",
-				addressModeU: "clamp-to-edge",
-				addressModeV: "clamp-to-edge",
+				addressModeU: "mirror-repeat",
+				addressModeV: "mirror-repeat",
 			});
 			device.queue.writeTexture(
 				{
@@ -97,10 +226,10 @@ export default class Sky {
 				format: "rgba16float",
 				sampleCount: 1,
 				dimension: "2d",
-				usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.STORAGE_BINDING,
+				usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
 			});
-
 			const cubemapGeneratorBindGroup = device.createBindGroup({
+				label: "skybox cubemap generator bind group",
 				layout: cubemapGeneratorPipeline.getBindGroupLayout(0),
 				entries: [
 					{
@@ -117,29 +246,82 @@ export default class Sky {
 					},
 				],
 			});
-
 			a.push(skyboxCubemapTexture, skyboxRectangleTexture);
+			{
+				const commandEncoder = device.createCommandEncoder();
+				const computePass = commandEncoder.beginComputePass();
+				computePass.setPipeline(cubemapGeneratorPipeline);
+				computePass.setBindGroup(0, cubemapGeneratorBindGroup);
+				computePass.dispatchWorkgroups(Math.ceil(SKYBOX_RESOLUTION / 8), Math.ceil(SKYBOX_RESOLUTION / 8), 6);
+				computePass.end();
+				device.queue.submit([commandEncoder.finish()]);
+			}
+			this.skyboxRenderData = this.createSkyboxRenderData(device, shaders, skyboxCubemapTexture);
 
-			const commandEncoder = device.createCommandEncoder();
-			const computePass = commandEncoder.beginComputePass();
-			computePass.setPipeline(cubemapGeneratorPipeline);
-			computePass.setBindGroup(0, cubemapGeneratorBindGroup);
-			computePass.dispatchWorkgroups(Math.ceil(SKYBOX_RESOLUTION / 8), Math.ceil(SKYBOX_RESOLUTION / 8), 6);
-			computePass.end();
-			device.queue.submit([commandEncoder.finish()]);
-
-
-			// generate the prefilter maps
-			const prefilterGeneratorPipeline = device.createComputePipeline({
-				label: "prefilter generator pipeline",
+			// create the irradiance map
+			const irradianceGeneratorPipeline = device.createComputePipeline({
+				label: "irradiance map generator compute pipeline",
 				layout: "auto",
 				compute: {
-					module: shaders.prefilterGenerator,
-					entryPoint: "compute_prefilter",
+					module: shaders.irradianceGenerator,
+					entryPoint: "compute_irradiance",
 				},
 			});
+			const irradianceTexture = device.createTexture({
+				label: "irradiance texture",
+				size: [IRRADIANCE_RESOLUTION, IRRADIANCE_RESOLUTION, 6],
+				format: "rgba16float",
+				sampleCount: 1,
+				dimension: "2d",
+				usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.STORAGE_BINDING,
+			});
+			const irradianceGeneratorBindGroup = device.createBindGroup({
+				label: "irradiance generator bind group",
+				layout: irradianceGeneratorPipeline.getBindGroupLayout(0),
+				entries: [
+					{
+						binding: 0,
+						resource: skyboxCubemapTexture.createView({
+							dimension: "cube",
+						}),
+					},
+					{
+						binding: 1,
+						resource: device.createSampler({
+							minFilter: "linear",
+							magFilter: "linear",
+						}),
+					},
+					{
+						binding: 2,
+						resource: irradianceTexture.createView(),
+					},
+				],
+			});
+			a.push(irradianceTexture);
+			{
+				const commandEncoder = device.createCommandEncoder();
+				const computePass = commandEncoder.beginComputePass();
+				computePass.setPipeline(irradianceGeneratorPipeline);
+				computePass.setBindGroup(0, irradianceGeneratorBindGroup);
+				computePass.dispatchWorkgroups(
+					Math.ceil(IRRADIANCE_RESOLUTION / 4),
+					Math.ceil(IRRADIANCE_RESOLUTION / 4),
+					6,
+				);
+				computePass.end();
+				device.queue.submit([commandEncoder.finish()]);
+			}
 
-
+			// generate the prefilter maps
+			// const prefilterGeneratorPipeline = device.createComputePipeline({
+			// 	label: "prefilter generator pipeline",
+			// 	layout: "auto",
+			// 	compute: {
+			// 		module: shaders.prefilterGenerator,
+			// 		entryPoint: "compute_prefilter",
+			// 	},
+			// });
 
 			// const skyboxCubemapTexture = device.createTexture({
 			// 	label: "skybox cubemap texture",
@@ -163,37 +345,6 @@ export default class Sky {
 			// 	addressModeV: "clamp-to-edge",
 			// 	addressModeW: "clamp-to-edge",
 			// });
-
-			// prettier-ignore
-			const cubeVertexData = new Float32Array([
-				-1.0, -1.0, -1.0,   1.0, -1.0, -1.0, 
-				1.0, 1.0, -1.0,     -1.0, 1.0, -1.0, 
-				-1.0, -1.0, 1.0,    1.0, -1.0, 1.0,
-				1.0, 1.0, 1.0,      -1.0, 1.0, 1.0
-			]);
-			const cubeVertexBuffer = device.createBuffer({
-				label: "skybox cube vertex buffer",
-				size: cubeVertexData.byteLength,
-				usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-				mappedAtCreation: true,
-			});
-			new Float32Array(cubeVertexBuffer.getMappedRange()).set(cubeVertexData);
-			cubeVertexBuffer.unmap();
-
-			// prettier-ignore
-			const cubeIndexData = new Uint16Array([
-				0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 
-				0, 1, 5, 0, 5, 4, 2, 3, 7, 2, 7, 6, 
-				1, 2, 6, 1, 6, 5, 0, 7, 3, 0, 4, 7,
-			]);
-			const cubeIndexBuffer = device.createBuffer({
-				label: "skybox cube index buffer",
-				size: cubeIndexData.byteLength,
-				usage: GPUBufferUsage.INDEX,
-				mappedAtCreation: true,
-			});
-			new Uint16Array(cubeIndexBuffer.getMappedRange()).set(cubeIndexData);
-			cubeIndexBuffer.unmap();
 
 			// create the framebuffer to draw the cubemap
 			// const cubemapFBO = gl.createFramebuffer();

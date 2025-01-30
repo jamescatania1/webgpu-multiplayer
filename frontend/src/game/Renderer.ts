@@ -57,6 +57,7 @@ export default class Renderer {
 
 	private readonly shaders: Shaders;
 	private readonly camera: Camera;
+	private readonly sky: Sky;
 	private objects: Model[] = [];
 	private cubes: Cube[] = [];
 	private postFXQuad: {
@@ -86,7 +87,7 @@ export default class Renderer {
 			format: this.presentationFormat,
 		});
 
-		const sky = new Sky(this.device, this.camera, this.shaders);
+		this.sky = new Sky(this.device, this.camera, this.shaders);
 
 		// uniform bind group layouts
 		const cameraBindGroupLayout = this.device.createBindGroupLayout({
@@ -806,6 +807,17 @@ export default class Renderer {
 				this.camera.position.byteOffset,
 				this.camera.position.byteLength,
 			)
+			
+			// rot proj matrix for the skybox
+			if (this.sky.skyboxRenderData) {
+				this.device.queue.writeBuffer(
+					this.sky.skyboxRenderData.cameraUniformBuffer,
+					0,
+					this.camera.rotProjMatrix.buffer,
+					this.camera.rotProjMatrix.byteOffset,
+					this.camera.rotProjMatrix.byteLength,
+				)
+			}
 
 			for (let i = 0; i < this.cubes.length; i++) {
 				this.cubes[i].update(this.device, this.camera, i * 2);
@@ -856,6 +868,15 @@ export default class Renderer {
 				drawPass.setVertexBuffer(0, model.modelData.vertexBuffer);
 				drawPass.setIndexBuffer(model.modelData.indexBuffer, model.modelData.indexFormat);
 				drawPass.drawIndexed(model.modelData.indexCount);
+			}
+
+			if (this.sky.skyboxRenderData) {
+				drawPass.setPipeline(this.sky.skyboxRenderData.pipeline);
+				drawPass.setBindGroup(0, this.sky.skyboxRenderData.cameraBindGroup);
+				drawPass.setBindGroup(1, this.sky.skyboxRenderData.textureBindGroup);
+				drawPass.setVertexBuffer(0, this.sky.skyboxRenderData.vertexBuffer);
+				drawPass.setIndexBuffer(this.sky.skyboxRenderData.indexBuffer, "uint16");
+				drawPass.drawIndexed(36);
 			}
 			drawPass.end();
 		}

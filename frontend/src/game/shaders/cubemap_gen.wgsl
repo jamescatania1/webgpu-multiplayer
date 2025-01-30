@@ -15,24 +15,21 @@ fn compute_skybox(in: ComputeIn) {
     let cube_dim: vec2<u32> = textureDimensions(u_cubemap);
 
     const PI = 3.14159265359;
-    // 0 - 3 are side faces, clockwise order
-    // 4 and 5 are top and bottom, respectively
     const face_transforms: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(PI / 2.0, 0.0),
-        vec2<f32>(PI, 0.0),
-        vec2<f32>(-PI / 2.0, 0.0),
-        vec2<f32>(0, -PI / 2.0),
-        vec2<f32>(0, PI / 2.0),
+        vec2<f32>(0.0, 0.0), // right
+        vec2<f32>(PI, 0.0), // left
+        vec2<f32>(0, -PI / 2.0), // top
+        vec2<f32>(0, PI / 2.0), // bottom
+        vec2<f32>(-PI / 2.0, 0.0), // back
+        vec2<f32>(PI / 2.0, 0.0), // front
     );
     let face_tr: vec2<f32> = face_transforms[in.id.z];
 
     const an: f32 = sin(PI / 4.0);
     const ak: f32 = cos(PI / 4.0);
 
-
-    var nx: f32 = (f32(in.id.y) / f32(cube_dim.y)) * 2.0 - 1.0;
-    var ny: f32 = (f32(in.id.x) / f32(cube_dim.x)) * 2.0 - 1.0;
+    var nx: f32 = (f32(in.id.x) / f32(cube_dim.x)) * 2.0 - 1.0;
+    var ny: f32 = (f32(in.id.y) / f32(cube_dim.y)) * 2.0 - 1.0;
     nx *= an;
     ny *= an;
 
@@ -69,7 +66,6 @@ fn compute_skybox(in: ComputeIn) {
     while (u > 1.0) {
         u -= 2.0;
     }
-
 
     var uv = vec2<f32>(u, v) / 2.0 + 0.5;
 

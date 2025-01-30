@@ -1,8 +1,10 @@
 import { default as basicShaderSource } from "./shaders/basic.wgsl";
 import { default as PBRShaderSource } from "./shaders/pbr.wgsl";
 import { default as depthShaderSource } from "./shaders/depth.wgsl";
+import { default as skyboxShaderSource } from "./shaders/skybox.wgsl";
 import { default as postFXShaderSource } from "./shaders/post_fx.wgsl";
 import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
+import { default as irradianceGeneratorSource } from "./shaders/irradiance_gen.wgsl";
 import { default as prefilterGeneratorSource } from "./shaders/prefilter_gen.wgsl";
 import { ssaoSettings } from "./Renderer";
 
@@ -10,8 +12,10 @@ export type Shaders = {
 	basic: GPUShaderModule;
 	PBR: GPUShaderModule;
 	depth: GPUShaderModule;
+	skybox: GPUShaderModule;
 	postFX: GPUShaderModule;
 	cubemapGenerator: GPUShaderModule;
+	irradianceGenerator: GPUShaderModule;
 	prefilterGenerator: GPUShaderModule;
 };
 
@@ -37,6 +41,10 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "depth prepass shader",
 		code: depthShaderSource,
 	});
+	const skybox = loadShader(device, {
+		label: "skybox draw shader",
+		code: skyboxShaderSource,
+	});
 	const postFX = loadShader(device, {
 		label: "post processing shader",
 		code: postFXShaderSource,
@@ -45,6 +53,10 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "cubemap generator compute shader",
 		code: cubemapGeneratorSource,
 	});
+	const irradianceGenerator = loadShader(device, {
+		label: "irradiance map generator compute shader",
+		code: irradianceGeneratorSource,
+	})
 	const prefilterGenerator = loadShader(device, {
 		label: "prefilter map generator compute shader",
 		code: prefilterGeneratorSource,
@@ -54,8 +66,10 @@ export function loadShaders(device: GPUDevice): Shaders {
 		basic: basic,
 		PBR: PBR,
 		depth: depth,
+		skybox: skybox,
 		postFX: postFX,
 		cubemapGenerator: cubemapGenerator,
+		irradianceGenerator: irradianceGenerator,
 		prefilterGenerator: prefilterGenerator,
 	};
 }
