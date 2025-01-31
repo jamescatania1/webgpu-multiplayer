@@ -63,7 +63,8 @@ export default class Sky {
 			},
 			depthStencil: {
 				depthWriteEnabled: false,
-				depthCompare: "less-equal",
+				depthCompare: "always",
+				// depthCompare: "less-equal",
 				format: "depth32float",
 			},
 			multisample: {
@@ -256,7 +257,6 @@ export default class Sky {
 				computePass.end();
 				device.queue.submit([commandEncoder.finish()]);
 			}
-			this.skyboxRenderData = this.createSkyboxRenderData(device, shaders, skyboxCubemapTexture);
 
 			// create the irradiance map
 			const irradianceGeneratorPipeline = device.createComputePipeline({
@@ -273,7 +273,7 @@ export default class Sky {
 				format: "rgba16float",
 				sampleCount: 1,
 				dimension: "2d",
-				usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.STORAGE_BINDING,
+				usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
 			});
 			const irradianceGeneratorBindGroup = device.createBindGroup({
 				label: "irradiance generator bind group",
@@ -282,18 +282,11 @@ export default class Sky {
 					{
 						binding: 0,
 						resource: skyboxCubemapTexture.createView({
-							dimension: "cube",
+							dimension: "2d-array",
 						}),
 					},
 					{
 						binding: 1,
-						resource: device.createSampler({
-							minFilter: "linear",
-							magFilter: "linear",
-						}),
-					},
-					{
-						binding: 2,
 						resource: irradianceTexture.createView(),
 					},
 				],
@@ -312,6 +305,8 @@ export default class Sky {
 				computePass.end();
 				device.queue.submit([commandEncoder.finish()]);
 			}
+			this.skyboxRenderData = this.createSkyboxRenderData(device, shaders, irradianceTexture);
+
 
 			// generate the prefilter maps
 			// const prefilterGeneratorPipeline = device.createComputePipeline({
