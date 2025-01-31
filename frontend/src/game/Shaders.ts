@@ -6,6 +6,7 @@ import { default as postFXShaderSource } from "./shaders/post_fx.wgsl";
 import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
 import { default as irradianceGeneratorSource } from "./shaders/irradiance_gen.wgsl";
 import { default as prefilterGeneratorSource } from "./shaders/prefilter_gen.wgsl";
+import { default as brdfGeneratorSource } from "./shaders/brdf_gen.wgsl";
 import { ssaoSettings } from "./Renderer";
 
 export type Shaders = {
@@ -17,6 +18,7 @@ export type Shaders = {
 	cubemapGenerator: GPUShaderModule;
 	irradianceGenerator: GPUShaderModule;
 	prefilterGenerator: GPUShaderModule;
+	brdfGenerator: GPUShaderModule;
 };
 
 type ShaderLoaderDescriptor = {
@@ -61,6 +63,10 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "prefilter map generator compute shader",
 		code: prefilterGeneratorSource,
 	});
+	const brdfGenerator = loadShader(device, {
+		label: "BRDF lut generator compute shader",
+		code: brdfGeneratorSource,
+	});
 
 	return {
 		basic: basic,
@@ -71,6 +77,7 @@ export function loadShaders(device: GPUDevice): Shaders {
 		cubemapGenerator: cubemapGenerator,
 		irradianceGenerator: irradianceGenerator,
 		prefilterGenerator: prefilterGenerator,
+		brdfGenerator: brdfGenerator,
 	};
 }
 

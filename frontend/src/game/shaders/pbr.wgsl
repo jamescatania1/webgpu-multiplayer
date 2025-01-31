@@ -26,18 +26,21 @@ struct TransformData {
 @group(2) @binding(1) var u_depth_sampler: sampler;
 @group(2) @binding(2) var<uniform> u_screen_size: vec2<f32>;
 
+@group(3) @binding(0) var u_ssao_noise_sampler: sampler;
+@group(3) @binding(1) var u_ssao_noise: texture_2d<f32>;
+@group(3) @binding(2) var u_scene_sampler: sampler;
+@group(3) @binding(3) var u_irradiance: texture_cube<f32>;
+@group(3) @binding(4) var u_prefilter: texture_cube<f32>;
+@group(3) @binding(5) var u_brdf: texture_2d<f32>;
 struct SSAOData {
     kernel: array<vec3<f32>, TEMPL_ssao_samples>,
 };
-@group(3) @binding(0) var<uniform> u_ssao: SSAOData;
-@group(3) @binding(1) var u_ssao_noise: texture_2d<f32>;
-@group(3) @binding(2) var u_ssao_noise_sampler: sampler;
-
+@group(3) @binding(6) var<uniform> u_ssao: SSAOData;
 struct LightingData {
     sun_direction: vec3<f32>,
     sun_color: vec4<f32>,
 };
-@group(3) @binding(3) var<uniform> u_lighting: LightingData;
+@group(3) @binding(7) var<uniform> u_lighting: LightingData;
 
 struct VertexIn { 
     @location(0) vertex_xyzc: vec2<u32>,
@@ -125,7 +128,7 @@ fn ssao(view_pos: vec3f, view_normal: vec3f, sample_location: vec2f, clip_z: f32
     // fades out occlusion at further distances
     let depth_linear: f32 = (2.0 * near) / (far + near - (clip_z * 2.0 - 1.0) * (far - near));
     let occlusion_fade: f32 = 1.0 - clamp((depth_linear * (far - near) - ssao_fade_start) / (ssao_fade_end - ssao_fade_start), 0.0, 1.0);
-    occlusion = 1.0 - occlusion_fade * occlusion;
+    occlusion = clamp(1.0 - occlusion_fade * occlusion, 0.0, 1.0);
 
     return occlusion;
 }
@@ -133,12 +136,8 @@ fn ssao(view_pos: vec3f, view_normal: vec3f, sample_location: vec2f, clip_z: f32
 
 @fragment 
 fn fs(in: VertexOut) -> FragmentOut {
-    // not pbr yet
-    // let l = u_lighting.sun_direction;
-    // let lambert = max(dot(n, l), 0.0);
-    // var ambient = lambert * u_lighting.sun_color.rgb * u_lighting.sun_color.a * in.color;
     let n = normalize(in.normal);
-    let rough: f32 = 0.5;
+    let rough: f32 = 0.91;
     let metal: f32 = 0.0;
     let albedo: vec3f = in.color;
 
@@ -151,7 +150,7 @@ fn fs(in: VertexOut) -> FragmentOut {
     var light: vec3f = vec3f(0.0);
 
     var directional: vec3f; {
-        let l_i: vec3f = u_lighting.sun_direction;
+        let l_i: vec3f = normalize(u_lighting.sun_direction);
         let l_radiance: vec3f = u_lighting.sun_color.rgb * u_lighting.sun_color.a;
 
         let l_half: vec3f = normalize(l_i + l_o);
@@ -162,7 +161,7 @@ fn fs(in: VertexOut) -> FragmentOut {
         let d: f32 = ndf_ggx(cos_lh, rough);
         let g: f32 = geom_schlick_ggx(cos_li, cos_lo, rough);
 
-        let k_d: vec3f = mix(vec3f(1.0) - f, vec3f(0.0), metal);
+        let k_d: vec3f = mix(vec3<f32>(1.0) - f, vec3<f32>(0.0), metal);
         let diffuse_brdf: vec3f = k_d * albedo;
         let specular_brdf: vec3f = f * d * g / (4.0 * max(0.0001, cos_lo * cos_li));
 
@@ -170,10 +169,25 @@ fn fs(in: VertexOut) -> FragmentOut {
     }
     light += directional;
 
+    var ambient: vec3<f32>; {
+        let irradiance: vec3<f32> = textureSample(u_irradiance, u_scene_sampler, n).rgb;
+        
+        let f: vec3<f32> = fresnel_schlick(cos_lo, f_0, rough);
+        let k_d: vec3<f32> = mix(vec3<f32>(1.0) - f, vec3<f32>(0.0), metal);
+        let diffuse: vec3<f32> = k_d * irradiance * albedo;
+
+        let specular_irradiance: vec3<f32> = textureSampleLevel(u_prefilter, u_scene_sampler, l_r, rough * 4.0).rgb;
+        let brdf: vec2<f32> = textureSample(u_brdf, u_scene_sampler, vec2<f32>(cos_lo, rough)).rg;
+        let specular: vec3<f32> = specular_irradiance * (f_0 * brdf.x + brdf.y);
+        ambient = diffuse + specular;
+    }
+
     // SSAO
     let occlusion = ssao(in.view_pos.xyz, in.view_normal, in.vertex_pos_hash, in.pos.z);
 
-    var color: vec3f = vec3f(1.0) * occlusion + light;
+    light += occlusion * ambient;
+
+    var color: vec3f = light;
 
     var out: FragmentOut;
     out.color = vec4f(color, 1.0);

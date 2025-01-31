@@ -19,8 +19,16 @@ export const ssaoSettings = {
 	noiseScale: 1000.0,
 };
 export const skySettings = {
-
-}
+	skyboxSource: "sky",
+	skyboxResolution: 2048,
+	irradianceResolution: 64,
+	irradianceSampleDelta: 0.025,
+	prefilterResolution: 256,
+	prefilterMipLevels: 5,
+	prefilterSamples: 2048,
+	brdfResolution: 1024,
+	brdfSamples: 2048,
+};
 
 export default class Renderer {
 	private readonly canvas: HTMLCanvasElement;
@@ -34,12 +42,12 @@ export default class Renderer {
 	private globalUniformBindGroupLayouts: {
 		camera: GPUBindGroupLayout;
 		depth: GPUBindGroupLayout;
-		ssao: GPUBindGroupLayout;
+		scene: GPUBindGroupLayout;
 	};
 	private globalUniformBindGroups: {
 		camera: GPUBindGroup;
 		depth: GPUBindGroup | null;
-		ssao: GPUBindGroup;
+		scene: GPUBindGroup | null;
 		drawTexture: GPUBindGroup | null;
 	};
 	private readonly pipelines: {
@@ -87,7 +95,7 @@ export default class Renderer {
 			format: this.presentationFormat,
 		});
 
-		this.sky = new Sky(this.device, this.camera, this.shaders);
+		this.sky = new Sky(this, this.device, this.camera, this.shaders);
 
 		// uniform bind group layouts
 		const cameraBindGroupLayout = this.device.createBindGroupLayout({
@@ -120,13 +128,13 @@ export default class Renderer {
 				}
 			],
 		});
-		const ssaoBindGroupLayout = this.device.createBindGroupLayout({
+		const sceneBindGroupLayout = this.device.createBindGroupLayout({
 			label: "ssao bind group layout",
 			entries: [
 				{
 					binding: 0,
 					visibility: GPUShaderStage.FRAGMENT,
-					buffer: {},
+					sampler: {}
 				},
 				{
 					binding: 1,
@@ -136,19 +144,43 @@ export default class Renderer {
 				{
 					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
-					sampler: {},
+					sampler: {}
 				},
-				{ // lighting data
+				{
 					binding: 3,
 					visibility: GPUShaderStage.FRAGMENT,
-					buffer: {},
-				}
+					texture: {
+						viewDimension: "cube",
+					},
+				},
+				{
+					binding: 4,
+					visibility: GPUShaderStage.FRAGMENT,
+					texture: {
+						viewDimension: "cube"
+					},
+				},
+				{
+					binding: 5,
+					visibility: GPUShaderStage.FRAGMENT,
+					texture: {},
+				},
+				{
+					binding: 6,
+					visibility: GPUShaderStage.FRAGMENT,
+					buffer: {}
+				},
+				{
+					binding: 7,
+					visibility: GPUShaderStage.FRAGMENT,
+					buffer: {}
+				},
 			],
 		});
 		this.globalUniformBindGroupLayouts = {
 			camera: cameraBindGroupLayout,
 			depth: depthBindGroupLayout,
-			ssao: ssaoBindGroupLayout,
+			scene: sceneBindGroupLayout,
 		};
 		const transformBindGroupLayout = this.device.createBindGroupLayout({
 			label: "transform bind group layout",
@@ -268,7 +300,7 @@ export default class Renderer {
 				this.globalUniformBindGroupLayouts.camera,
 				transformBindGroupLayout,
 				this.globalUniformBindGroupLayouts.depth,
-				this.globalUniformBindGroupLayouts.ssao,
+				this.globalUniformBindGroupLayouts.scene,
 			],
 		});
 		const PBRRenderPipeline = this.device.createRenderPipeline({
@@ -387,105 +419,11 @@ export default class Renderer {
 			],
 		});
 
-		// ssao uniform buffer and bind group
-		const ssaoUniformBuffer = this.device.createBuffer({
-			label: "ssao uniform buffer",
-			size: ssaoSettings.sampleCount * 4 * 4,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-			mappedAtCreation: true,
-		});
-		const ssaoBufferData = new Float32Array(ssaoSettings.sampleCount * 4).fill(0);
-		let i = 0;
-		while (i < ssaoSettings.sampleCount) {
-			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random());
-			vec3.normalize(sample, sample);
-			let scale = i / ssaoSettings.sampleCount;
-			scale = 0.1 + scale * scale * (1.0 - 0.1);
-			vec3.scale(sample, scale, sample);
-
-			if (vec3.normalize(sample)[2] < ssaoSettings.kernelDotCutOff) {
-				continue;
-			}
-
-			ssaoBufferData.set(sample, i * 4);
-			i++;
-		}
-		new Float32Array(ssaoUniformBuffer.getMappedRange()).set(ssaoBufferData);
-		ssaoUniformBuffer.unmap();
-		const ssaoNoiseTexture = this.device.createTexture({
-			label: "ssao noise texture",
-			size: [ssaoSettings.noiseTextureSize, ssaoSettings.noiseTextureSize],
-			format: "rgba8unorm",
-			usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
-			sampleCount: 1,
-			textureBindingViewDimension: "2d",
-		});
-		const ssaoNoiseData = new Uint8Array(4 * ssaoSettings.noiseTextureSize * ssaoSettings.noiseTextureSize);
-		for (let i = 0; i < ssaoNoiseData.length; i++) {
-			ssaoNoiseData[i] = Math.random() * 255;
-		}
-		this.device.queue.writeTexture(
-			{
-				texture: ssaoNoiseTexture,
-				mipLevel: 0,
-				origin: { x: 0, y: 0, z: 0 },
-			},
-			ssaoNoiseData,
-			{ bytesPerRow: 4 * ssaoSettings.noiseTextureSize, rowsPerImage: ssaoSettings.noiseTextureSize },
-			{ width: ssaoSettings.noiseTextureSize, height: ssaoSettings.noiseTextureSize },
-		);
-		const ssaoNoiseSampler = this.device.createSampler({
-			minFilter: "nearest",
-			magFilter: "nearest",
-			addressModeU: "repeat",
-			addressModeV: "repeat",
-		});
-
-		// lighting uniform buffer
-		const lightingUniformBuffer = this.device.createBuffer({
-			label: "lighting uniform buffer",
-			size: 2 * 4 * 4,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-			mappedAtCreation: true,
-		});
-		const sunDirection = vec3.fromValues(20, 50, 17);
-		vec3.normalize(sunDirection, sunDirection);
-		const sunColor = vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0);
-		const sunIntensity = 1.0;
-		const lightingBufferData = new Float32Array(2 * 4);
-		lightingBufferData.set(sunDirection, 0);
-		lightingBufferData.set(sunColor, 4);
-		lightingBufferData[7] = sunIntensity;
-		new Float32Array(lightingUniformBuffer.getMappedRange()).set(lightingBufferData);
-		lightingUniformBuffer.unmap();
-
-		const ssaoBindGroup = this.device.createBindGroup({
-			label: "ssao bind group",
-			layout: ssaoBindGroupLayout,
-			entries: [
-				{
-					binding: 0,
-					resource: { buffer: ssaoUniformBuffer, offset: 0, size: ssaoSettings.sampleCount * 4 * 4 },
-				},
-				{
-					binding: 1,
-					resource: ssaoNoiseTexture.createView(),
-				},
-				{
-					binding: 2,
-					resource: ssaoNoiseSampler,
-				},
-				{
-					binding: 3,
-					resource: { buffer: lightingUniformBuffer, offset: 0, size: 2 * 4 * 4 },
-				}
-			],
-		});
-
 		this.globalUniformBindGroups = {
 			camera: cameraUniformBindGroup,
-			ssao: ssaoBindGroup,
-			// the null bind groups depend on the screen size, and are created in buildRenderPassDescriptors
+			// depend on the lighting load state, and is created in onLightingLoad
+			scene: null,
+			// depend on the screen size, and are created in buildRenderPassDescriptors
 			depth: null,
 			drawTexture: null,
 		};
@@ -685,7 +623,7 @@ export default class Renderer {
 			label: "output screen draw descriptor",
 			colorAttachments: [
 				{
-					clearValue: [0.0, 0.0, 0.15, 1.0],
+					clearValue: [0.0, 0.0, 0.0, 1.0],
 					loadOp: "clear",
 					storeOp: "store",
 					view: sceneDrawView,
@@ -725,6 +663,135 @@ export default class Renderer {
 		};
 	}
 
+	public onLightingLoad() {
+		const skyData = this.sky.sceneRenderData;
+		if (!skyData) {
+			return;
+		}
+
+		// ssao uniform buffer
+		const ssaoUniformBuffer = this.device.createBuffer({
+			label: "ssao uniform buffer",
+			size: ssaoSettings.sampleCount * 4 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		const ssaoBufferData = new Float32Array(ssaoSettings.sampleCount * 4).fill(0);
+		let i = 0;
+		while (i < ssaoSettings.sampleCount) {
+			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random());
+			vec3.normalize(sample, sample);
+			let scale = i / ssaoSettings.sampleCount;
+			scale = 0.1 + scale * scale * (1.0 - 0.1);
+			vec3.scale(sample, scale, sample);
+
+			if (vec3.normalize(sample)[2] < ssaoSettings.kernelDotCutOff) {
+				continue;
+			}
+
+			ssaoBufferData.set(sample, i * 4);
+			i++;
+		}
+		new Float32Array(ssaoUniformBuffer.getMappedRange()).set(ssaoBufferData);
+		ssaoUniformBuffer.unmap();
+		const ssaoNoiseTexture = this.device.createTexture({
+			label: "ssao noise texture",
+			size: [ssaoSettings.noiseTextureSize, ssaoSettings.noiseTextureSize],
+			format: "rgba8unorm",
+			usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+			sampleCount: 1,
+			textureBindingViewDimension: "2d",
+		});
+		const ssaoNoiseData = new Uint8Array(4 * ssaoSettings.noiseTextureSize * ssaoSettings.noiseTextureSize);
+		for (let i = 0; i < ssaoNoiseData.length; i++) {
+			ssaoNoiseData[i] = Math.random() * 255;
+		}
+		this.device.queue.writeTexture(
+			{
+				texture: ssaoNoiseTexture,
+				mipLevel: 0,
+				origin: { x: 0, y: 0, z: 0 },
+			},
+			ssaoNoiseData,
+			{ bytesPerRow: 4 * ssaoSettings.noiseTextureSize, rowsPerImage: ssaoSettings.noiseTextureSize },
+			{ width: ssaoSettings.noiseTextureSize, height: ssaoSettings.noiseTextureSize },
+		);
+
+		// lighting uniform buffer
+		const lightingUniformBuffer = this.device.createBuffer({
+			label: "lighting uniform buffer",
+			size: 2 * 4 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		const sunDirection = vec3.fromValues(20, 50, 17);
+		const lightingBufferData = new Float32Array(2 * 4);
+		lightingBufferData.set(sunDirection, 0);
+		lightingBufferData.set(this.sky.sunColor, 4);
+		lightingBufferData[7] = this.sky.sunIntensity;
+		new Float32Array(lightingUniformBuffer.getMappedRange()).set(lightingBufferData);
+		lightingUniformBuffer.unmap();
+
+		const ssaoNoiseSampler = this.device.createSampler({
+			minFilter: "nearest",
+			magFilter: "nearest",
+			addressModeU: "repeat",
+			addressModeV: "repeat",
+		});
+
+		const sceneSampler = this.device.createSampler({
+			minFilter: "linear",
+			magFilter: "linear",
+			addressModeU: "clamp-to-edge",
+			addressModeV: "clamp-to-edge",
+			addressModeW: "clamp-to-edge",
+		});
+
+		const sceneBindGroup = this.device.createBindGroup({
+			label: "ssao bind group",
+			layout: this.globalUniformBindGroupLayouts.scene,
+			entries: [
+				{
+					binding: 0,
+					resource: ssaoNoiseSampler,
+				},
+				{
+					binding: 1,
+					resource: ssaoNoiseTexture.createView(),
+				},
+				{
+					binding: 2,
+					resource: sceneSampler,
+				},
+				{
+					binding: 3,
+					resource: skyData.irradianceTexture.createView({
+						dimension: "cube",
+					}),
+				},
+				{
+					binding: 4,
+					resource: skyData.prefilterTexture.createView({
+						dimension: "cube",
+					})
+				},
+				{
+					binding: 5,
+					resource: skyData.brdfTexture.createView(),
+				},
+				{
+					binding: 6,
+					resource: { buffer: ssaoUniformBuffer, offset: 0, size: ssaoSettings.sampleCount * 4 * 4 },
+				},
+				{
+					binding: 7,
+					resource: { buffer: lightingUniformBuffer, offset: 0, size: 2 * 4 * 4 },
+				}
+			],
+		});
+		this.globalUniformBindGroups.scene = sceneBindGroup;
+	}
+
 	// public add(obj: SceneObject) {
 	//     this.objects.push(obj);
 	// }
@@ -740,8 +807,8 @@ export default class Renderer {
 			if (input.pointerLocked) {
 				this.camera.yaw += input.dx * MOUSE_SENSITIVITY;
 				this.camera.pitch = Math.min(
-					Math.PI / 2,
-					Math.max(-Math.PI / 2, this.camera.pitch - input.dy * MOUSE_SENSITIVITY),
+					Math.PI / 2 - 0.0001,
+					Math.max(-Math.PI / 2 + 0.0001, this.camera.pitch - input.dy * MOUSE_SENSITIVITY),
 				);
 			}
 
@@ -855,13 +922,13 @@ export default class Renderer {
 			depthPass.end();
 		}
 
-		{
+		if (this.globalUniformBindGroups.scene) {
 			// screen draw pass
 			const drawPass = encoder.beginRenderPass(this.renderPassDescriptors!.sceneDraw);
 			drawPass.setPipeline(this.pipelines.PBR);
 			drawPass.setBindGroup(0, this.globalUniformBindGroups.camera);
 			drawPass.setBindGroup(2, this.globalUniformBindGroups.depth);
-			drawPass.setBindGroup(3, this.globalUniformBindGroups.ssao);
+			drawPass.setBindGroup(3, this.globalUniformBindGroups.scene);
 
 			for (const model of this.objects) {
 				drawPass.setBindGroup(1, model.transformUniformBindGroup);

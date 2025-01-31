@@ -1,7 +1,7 @@
-override exposure: f32 = 0.35;
+override exposure: f32 = 0.5;
 override temperature: f32 = 0.2; // [-1.6, 1.6] for cool/warm
 override tint: f32 = 0.1;
-override contrast: f32 = 1.1;
+override contrast: f32 = 1.0;
 override brightness: f32 = 0.0;
 override gamma: f32 = 2.2;
 
@@ -41,9 +41,8 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
     color = aces(color);
 
     color = pow(color, vec3f(1.0 / gamma));
-    // return vec4f(color, 1.0);
-    return vec4<f32>(textureSample(color_texture, color_sampler, in.uv).rgb, 1.0);
-
+    return vec4f(color, 1.0);
+    // return vec4<f32>(textureSample(color_texture, color_sampler, in.uv).rgb, 1.0);
 }
 
 fn white_balance(color: vec3f) -> vec3f {

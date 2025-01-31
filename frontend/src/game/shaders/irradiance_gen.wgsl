@@ -1,3 +1,5 @@
+override delta: f32 = 0.025;
+
 @group(0) @binding(0) var u_cubemap: texture_2d_array<f32>;
 @group(0) @binding(1) var u_irradiance: texture_storage_2d_array<rgba16float, write>;
 
@@ -10,24 +12,13 @@ fn compute_irradiance(in: ComputeIn) {
     let cube_dim: vec2<u32> = textureDimensions(u_cubemap);
     let irradiance_dim: vec2<u32> = textureDimensions(u_irradiance);
 
-    let u: f32 = (f32(in.id.x) / f32(irradiance_dim.x)) * 2.0 - 1.0;
-    let v: f32 = (f32(in.id.y) / f32(irradiance_dim.y)) * 2.0 - 1.0;
-    let face_world_positions: array<vec3<f32>, 6> = array<vec3<f32>, 6>(
-        vec3<f32>(1.0, -v, -u), // right
-        vec3<f32>(-1.0, -v, u), // left
-        vec3<f32>(u, 1.0, v), // top
-        vec3<f32>(u, -1.0, -v), // bottom
-        vec3<f32>(u, -v, 1.0), // back
-        vec3<f32>(-u, -v, -1.0), // front
-    );
-    let pos: vec3<f32> = face_world_positions[in.id.z];
+    let pos: vec3<f32> = world_pos(in.id, vec2<f32>(irradiance_dim));
 
     let normal: vec3<f32> = normalize(pos);
     var up = vec3<f32>(0.0, 1.0, 0.0);
     var right: vec3<f32> = normalize(cross(up, normal));
     up = normalize(cross(normal, right));
 
-    const delta: f32 = 0.05;
     const PI = 3.14159265359;
     
     var irradiance = vec3<f32>(0.0);
@@ -37,24 +28,49 @@ fn compute_irradiance(in: ComputeIn) {
             let tangent = vec3<f32>(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
             var sample: vec3<f32> = tangent.x * right + tangent.y * up + tangent.z * normal;
 
-            // transform the sample position to cubemap tex coords
-            let sample_uvw = cube_coord(sample, vec2<f32>(cube_dim));
+            let sample_uvw = cubemap_pos(sample, vec2<f32>(cube_dim));
 
-            irradiance += textureLoad(u_cubemap, sample_uvw.xy, sample_uvw.z, 0).rgb * cos(theta) * sin(theta);
-            // irradiance += textureSampleLevel(u_cubemap, u_cubemap_sampler, vec3<f32>(face_uv, f32(i32(face))), 0.0).rgb * cos(theta) * sin(theta);
+            irradiance += clamp(textureLoad(u_cubemap, sample_uvw.xy, sample_uvw.z, 0).rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * cos(theta) * sin(theta);
             samples += 1;
         }
     }
     irradiance = PI * irradiance * (1.0 / f32(samples));
-    // irradiance /= f32(samples);
     
     textureStore(u_irradiance, in.id.xy, in.id.z, vec4<f32>(irradiance, 1.0));
 }
 
-fn cube_coord(sample: vec3<f32>, cube_dim: vec2<f32>) -> vec3<i32> {
-let abs_sample: vec3<f32> = abs(sample);
+fn world_pos(cubemap_pos: vec3<u32>, cubemap_dim: vec2<f32>) -> vec3<f32> {
+    let u: f32 = (f32(cubemap_pos.x) / f32(cubemap_dim.x)) * 2.0 - 1.0;
+    let v: f32 = (f32(cubemap_pos.y) / f32(cubemap_dim.y)) * 2.0 - 1.0;
+    switch cubemap_pos.z {
+        case 0: { // right
+            return vec3<f32>(1.0, -v, -u); 
+        }
+        case 1: { // left
+            return vec3<f32>(-1.0, -v, u);
+        }
+        case 2: { // top
+            return vec3<f32>(u, 1.0, v);
+        }
+        case 3: { // bottom
+            return vec3<f32>(u, -1.0, -v);
+        }
+        case 4: { // back
+            return vec3<f32>(u, -v, 1.0);
+        }
+        case 5: { // front
+            return vec3<f32>(-u, -v, -1.0);
+        }
+        default: {
+            return vec3<f32>(0.0);
+        }
+    }
+}
+
+fn cubemap_pos(world_pos: vec3<f32>, cubemap_dim: vec2<f32>) -> vec3<i32> {
+    let abs_sample: vec3<f32> = abs(world_pos);
     let max_abs: f32 = max(max(abs_sample.x, abs_sample.y), abs_sample.z);
-    var tex = sample / max_abs;
+    var tex = world_pos / max_abs;
     var face: f32;
     var face_uv: vec2<f32>;
     if (abs_sample.x > abs_sample.y && abs_sample.x > abs_sample.z) {
@@ -73,9 +89,9 @@ let abs_sample: vec3<f32> = abs(sample);
         face = 4.0 + z;
     }
     face_uv = (face_uv + 1.0) * 0.5;
-    face_uv *= cube_dim;
-    face_uv.x = clamp(face_uv.x, 0.0, cube_dim.x - 1.0);
-    face_uv.y = clamp(face_uv.y, 0.0, cube_dim.y - 1.0);
+    face_uv *= cubemap_dim;
+    face_uv.x = clamp(face_uv.x, 0.0, cubemap_dim.x - 1.0);
+    face_uv.y = clamp(face_uv.y, 0.0, cubemap_dim.y - 1.0);
 
     return vec3<i32>(i32(face_uv.x), i32(face_uv.y), i32(face));
 }
