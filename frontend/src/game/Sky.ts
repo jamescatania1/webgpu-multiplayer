@@ -186,7 +186,7 @@ export default class Sky {
 		// gl.bindVertexArray(null);
 
 		// load the skybox hdr texture
-		loadHDR("/sky_indoor.hdr").then((hdr) => {
+		loadHDR("/sky_indoor.hdr", 30.0).then((hdr) => {
 			// generate the skybox cubemap from the equirrectangular hdr
 			const cubemapGeneratorPipeline = device.createComputePipeline({
 				label: "skybox cubemap generator compute pipeline",

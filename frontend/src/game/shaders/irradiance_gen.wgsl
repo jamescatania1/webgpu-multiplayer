@@ -40,7 +40,7 @@ fn compute_irradiance(in: ComputeIn) {
             // transform the sample position to cubemap tex coords
             let sample_uvw = cube_coord(sample, vec2<f32>(cube_dim));
 
-            irradiance += normalize(textureLoad(u_cubemap, sample_uvw.xy, sample_uvw.z, 0).rgb) * cos(theta) * sin(theta);
+            irradiance += textureLoad(u_cubemap, sample_uvw.xy, sample_uvw.z, 0).rgb * cos(theta) * sin(theta);
             // irradiance += textureSampleLevel(u_cubemap, u_cubemap_sampler, vec3<f32>(face_uv, f32(i32(face))), 0.0).rgb * cos(theta) * sin(theta);
             samples += 1;
         }
