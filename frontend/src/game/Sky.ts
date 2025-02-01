@@ -27,134 +27,20 @@ type SceneData = {
 };
 
 export default class Sky {
+	private readonly debug = true;
+
+	public readonly sunPosition = vec3.fromValues(20, 50, 17);
+	public readonly sunDirection = vec3.normalize(this.sunPosition);
 	public readonly sunColor = vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0));
 	public readonly sunIntensity = 0.75;
-	private readonly debug = true;
+	public readonly sunViewMatrix = mat4.create();
+	public readonly sunProjMatrix = mat4.ortho(-20, 20, -20, 20, 0.1, 100);
 
 	public skyboxRenderData: SkyboxRenderData | null = null;
 	public sceneRenderData: SceneData | null = null;
 	
 	private readonly camera: Camera;
 
-	private createSkyboxRenderData(device: GPUDevice, shaders: Shaders, skybox: GPUTexture): SkyboxRenderData {
-		const pipeline = device.createRenderPipeline({
-			label: "skybox scene view render pipeline",
-			layout: "auto",
-			vertex: {
-				module: shaders.skybox,
-				entryPoint: "vs",
-				buffers: [
-					{
-						arrayStride: 3 * 4,
-						attributes: [
-							{
-								shaderLocation: 0,
-								offset: 0,
-								format: "float32x3",
-							},
-						],
-					},
-				],
-			},
-			fragment: {
-				module: shaders.skybox,
-				entryPoint: "fs",
-				targets: [{ format: "rgba16float" }, { format: "r16float" }],
-			},
-			primitive: {
-				topology: "triangle-list",
-				cullMode: "none",
-			},
-			depthStencil: {
-				depthWriteEnabled: false,
-				depthCompare: "less-equal",
-				format: "depth32float",
-			},
-			multisample: {
-				count: 4,
-			},
-		});
-
-		const cameraUniformBuffer = device.createBuffer({
-			size: 16 * 4,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-		});
-		const cameraBindGroup = device.createBindGroup({
-			label: "skybox camera uniform bind group",
-			layout: pipeline.getBindGroupLayout(0),
-			entries: [
-				{
-					binding: 0,
-					resource: {
-						buffer: cameraUniformBuffer,
-						size: 16 * 4,
-						offset: 0,
-					},
-				},
-			],
-		});
-
-		const skyboxSampler = device.createSampler({
-			minFilter: "linear",
-			magFilter: "linear",
-		});
-		const textureBindGroup = device.createBindGroup({
-			label: "skybox texture bind group",
-			layout: pipeline.getBindGroupLayout(1),
-			entries: [
-				{
-					binding: 0,
-					resource: skybox.createView({
-						dimension: "cube",
-					}),
-				},
-				{
-					binding: 1,
-					resource: skyboxSampler,
-				},
-			],
-		});
-
-		// prettier-ignore
-		const cubeVertexData = new Float32Array([
-			-1.0, -1.0, -1.0,   1.0, -1.0, -1.0, 
-			1.0, 1.0, -1.0,     -1.0, 1.0, -1.0, 
-			-1.0, -1.0, 1.0,    1.0, -1.0, 1.0,
-			1.0, 1.0, 1.0,      -1.0, 1.0, 1.0
-		]);
-		const cubeVertexBuffer = device.createBuffer({
-			label: "skybox cube vertex buffer",
-			size: cubeVertexData.byteLength,
-			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-			mappedAtCreation: true,
-		});
-		new Float32Array(cubeVertexBuffer.getMappedRange()).set(cubeVertexData);
-		cubeVertexBuffer.unmap();
-
-		// prettier-ignore
-		const cubeIndexData = new Uint16Array([
-			0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 
-			0, 1, 5, 0, 5, 4, 2, 3, 7, 2, 7, 6, 
-			1, 2, 6, 1, 6, 5, 0, 7, 3, 0, 4, 7,
-		]);
-		const cubeIndexBuffer = device.createBuffer({
-			label: "skybox cube index buffer",
-			size: cubeIndexData.byteLength,
-			usage: GPUBufferUsage.INDEX,
-			mappedAtCreation: true,
-		});
-		new Uint16Array(cubeIndexBuffer.getMappedRange()).set(cubeIndexData);
-		cubeIndexBuffer.unmap();
-
-		return {
-			pipeline: pipeline,
-			vertexBuffer: cubeVertexBuffer,
-			indexBuffer: cubeIndexBuffer,
-			cameraUniformBuffer: cameraUniformBuffer,
-			cameraBindGroup: cameraBindGroup,
-			textureBindGroup: textureBindGroup,
-		};
-	}
 	constructor(renderer: Renderer, device: GPUDevice, camera: Camera, shaders: Shaders) {
 		let startTime: number;
 		if (this.debug) {
@@ -423,5 +309,130 @@ export default class Sky {
 
 			renderer.onLightingLoad();
 		});
+	}
+
+	public update(camera: Camera) {
+		mat4.lookAt(vec3.add(camera.position, this.sunPosition), camera.position, vec3.fromValues(0, 1, 0), this.sunViewMatrix);
+		// mat4.lookAt(this.sunPosition, vec3.fromValues(0,0,0), vec3.fromValues(0, 1, 0), this.sunViewMatrix);
+	}
+
+	private createSkyboxRenderData(device: GPUDevice, shaders: Shaders, skybox: GPUTexture): SkyboxRenderData {
+		const pipeline = device.createRenderPipeline({
+			label: "skybox scene view render pipeline",
+			layout: "auto",
+			vertex: {
+				module: shaders.skybox,
+				entryPoint: "vs",
+				buffers: [
+					{
+						arrayStride: 3 * 4,
+						attributes: [
+							{
+								shaderLocation: 0,
+								offset: 0,
+								format: "float32x3",
+							},
+						],
+					},
+				],
+			},
+			fragment: {
+				module: shaders.skybox,
+				entryPoint: "fs",
+				targets: [{ format: "rgba16float" }, { format: "r16float" }],
+			},
+			primitive: {
+				topology: "triangle-list",
+				cullMode: "none",
+			},
+			depthStencil: {
+				depthWriteEnabled: false,
+				depthCompare: "less-equal",
+				format: "depth32float",
+			},
+			multisample: {
+				count: 4,
+			},
+		});
+
+		const cameraUniformBuffer = device.createBuffer({
+			size: 16 * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+		const cameraBindGroup = device.createBindGroup({
+			label: "skybox camera uniform bind group",
+			layout: pipeline.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: {
+						buffer: cameraUniformBuffer,
+						size: 16 * 4,
+						offset: 0,
+					},
+				},
+			],
+		});
+
+		const skyboxSampler = device.createSampler({
+			minFilter: "linear",
+			magFilter: "linear",
+		});
+		const textureBindGroup = device.createBindGroup({
+			label: "skybox texture bind group",
+			layout: pipeline.getBindGroupLayout(1),
+			entries: [
+				{
+					binding: 0,
+					resource: skybox.createView({
+						dimension: "cube",
+					}),
+				},
+				{
+					binding: 1,
+					resource: skyboxSampler,
+				},
+			],
+		});
+
+		// prettier-ignore
+		const cubeVertexData = new Float32Array([
+			-1.0, -1.0, -1.0,   1.0, -1.0, -1.0, 
+			1.0, 1.0, -1.0,     -1.0, 1.0, -1.0, 
+			-1.0, -1.0, 1.0,    1.0, -1.0, 1.0,
+			1.0, 1.0, 1.0,      -1.0, 1.0, 1.0
+		]);
+		const cubeVertexBuffer = device.createBuffer({
+			label: "skybox cube vertex buffer",
+			size: cubeVertexData.byteLength,
+			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		new Float32Array(cubeVertexBuffer.getMappedRange()).set(cubeVertexData);
+		cubeVertexBuffer.unmap();
+
+		// prettier-ignore
+		const cubeIndexData = new Uint16Array([
+			0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 
+			0, 1, 5, 0, 5, 4, 2, 3, 7, 2, 7, 6, 
+			1, 2, 6, 1, 6, 5, 0, 7, 3, 0, 4, 7,
+		]);
+		const cubeIndexBuffer = device.createBuffer({
+			label: "skybox cube index buffer",
+			size: cubeIndexData.byteLength,
+			usage: GPUBufferUsage.INDEX,
+			mappedAtCreation: true,
+		});
+		new Uint16Array(cubeIndexBuffer.getMappedRange()).set(cubeIndexData);
+		cubeIndexBuffer.unmap();
+
+		return {
+			pipeline: pipeline,
+			vertexBuffer: cubeVertexBuffer,
+			indexBuffer: cubeIndexBuffer,
+			cameraUniformBuffer: cameraUniformBuffer,
+			cameraBindGroup: cameraBindGroup,
+			textureBindGroup: textureBindGroup,
+		};
 	}
 }

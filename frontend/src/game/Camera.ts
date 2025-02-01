@@ -12,11 +12,11 @@ export default class Camera {
 	public readonly up = vec3.fromValues(0, 1, 0);
 	public readonly forward = vec3.create();
 	public readonly right = vec3.create();
+	public readonly viewMatrix = mat4.create();
 	public readonly projMatrix = mat4.create();
 	public readonly projMatrixInverse = mat4.create();
 	public readonly viewProjMatrix = mat4.create();
 	public readonly rotProjMatrix = mat4.create();
-	public readonly viewMatrix = mat4.create();
 
 	constructor(canvas: HTMLCanvasElement) {
 		this.position[1] = 2.0;

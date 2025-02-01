@@ -1,6 +1,7 @@
 import { default as basicShaderSource } from "./shaders/basic.wgsl";
 import { default as PBRShaderSource } from "./shaders/pbr.wgsl";
 import { default as depthShaderSource } from "./shaders/depth.wgsl";
+import { default as shadowShaderSource } from "./shaders/shadows.wgsl";
 import { default as skyboxShaderSource } from "./shaders/skybox.wgsl";
 import { default as postFXShaderSource } from "./shaders/post_fx.wgsl";
 import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
@@ -13,6 +14,7 @@ export type Shaders = {
 	basic: GPUShaderModule;
 	PBR: GPUShaderModule;
 	depth: GPUShaderModule;
+	shadows: GPUShaderModule;
 	skybox: GPUShaderModule;
 	postFX: GPUShaderModule;
 	cubemapGenerator: GPUShaderModule;
@@ -43,6 +45,10 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "depth prepass shader",
 		code: depthShaderSource,
 	});
+	const shadows = loadShader(device, {
+		label: "shadow pass shader",
+		code: shadowShaderSource,
+	});
 	const skybox = loadShader(device, {
 		label: "skybox draw shader",
 		code: skyboxShaderSource,
@@ -72,6 +78,7 @@ export function loadShaders(device: GPUDevice): Shaders {
 		basic: basic,
 		PBR: PBR,
 		depth: depth,
+		shadows: shadows,
 		skybox: skybox,
 		postFX: postFX,
 		cubemapGenerator: cubemapGenerator,
