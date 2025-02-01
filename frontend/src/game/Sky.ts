@@ -29,6 +29,7 @@ type SceneData = {
 export default class Sky {
 	public readonly sunColor = vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0));
 	public readonly sunIntensity = 0.75;
+	private readonly debug = true;
 
 	public skyboxRenderData: SkyboxRenderData | null = null;
 	public sceneRenderData: SceneData | null = null;
@@ -154,12 +155,22 @@ export default class Sky {
 			textureBindGroup: textureBindGroup,
 		};
 	}
-
 	constructor(renderer: Renderer, device: GPUDevice, camera: Camera, shaders: Shaders) {
+		let startTime: number;
+		if (this.debug) {
+			console.log("Loading skybox hdr...");
+			startTime = performance.now()
+		}
+
 		this.camera = camera;
 
 		// load the skybox hdr texture
 		loadHDR(`/${skySettings.skyboxSource}.hdr`, 100.0).then((hdr) => {
+			if (this.debug) {
+				console.log("Loaded hdr in ", (performance.now() - startTime).toFixed(2), "ms. Generating scene lighting maps...");
+				startTime = performance.now();
+			}
+
 			// generate the skybox cubemap from the equirrectangular hdr
 			const cubemapGeneratorPipeline = device.createComputePipeline({
 				label: "skybox cubemap generator compute pipeline",
@@ -404,6 +415,10 @@ export default class Sky {
 				irradianceTexture: irradianceTexture,
 				prefilterTexture: prefilterTexture,
 				brdfTexture: brdfLUT,
+			}
+
+			if (this.debug) {
+				console.log("Generated scene lighting maps in ", (performance.now() - startTime).toFixed(2), "ms.");
 			}
 
 			renderer.onLightingLoad();

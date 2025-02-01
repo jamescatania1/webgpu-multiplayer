@@ -1,16 +1,15 @@
-
 export type HDRData = {
 	width: number;
 	height: number;
 	data: Uint16Array;
 };
 
-
 /**
  * Loads a .hdr file from url.
  */
 export default function loadHDR(url: string, minComponent: number = 1000.0): Promise<HDRData> {
 	return new Promise((resolve, reject) => {
+		const startTime = performance.now();
 		try {
 			fetch(url, {
 				method: "GET",
@@ -25,6 +24,7 @@ export default function loadHDR(url: string, minComponent: number = 1000.0): Pro
 					return response.arrayBuffer();
 				})
 				.then((buffer) => {
+					console.log((performance.now() - startTime).toFixed(2), "ms");
 					try {
 						resolve(read_hdr(new Uint8Array(buffer), minComponent));
 					} catch (e: any) {
@@ -87,18 +87,6 @@ const toHalf = (function () {
 	};
 })();
 
-
-function rgbeToRGBA16(rgbe: Uint8Array, out: Uint16Array, minComponent: number) {
-	if (rgbe[3] === 0) {
-        return;
-	}
-    const f1 = Math.pow(2.0, rgbe[3] - (128 + 8));
-    out[0] = toHalf(rgbe[0] * f1, minComponent);
-    out[1] = toHalf(rgbe[1] * f1, minComponent);
-    out[2] = toHalf(rgbe[2] * f1, minComponent);
-	out[3] = 1.0;
-}
-
 function read_hdr(uint8: Uint8Array, minComponent: number): HDRData {
 	let header = "";
 	let pos = 0;
@@ -125,16 +113,16 @@ function read_hdr(uint8: Uint8Array, minComponent: number): HDRData {
 	const data = new Uint16Array(width * height * 4);
 	if (c1 !== 2 || c2 !== 2 || !!(len & 0x80)) {
 		// not run-length encoded
+		console.log("not rle");
 		for (j = 0; j < height; ++j) {
 			for (i = 0; i < width; ++i) {
 				const rgbe = uint8.subarray(pos, pos + 4);
 				pos += 4;
 				const start = (j * width + i) * 4;
-				rgbeToRGBA16(rgbe, data.subarray(start, start + 4), minComponent);
+				// rgbeToRGBA16(rgbe, data.subarray(start, start + 4), minComponent);
 			}
 		}
 	} else {
-		let scanline: Uint8Array | null = null;
 		let c1: number;
 		let c2: number;
 		let len: number;
@@ -151,9 +139,6 @@ function read_hdr(uint8: Uint8Array, minComponent: number): HDRData {
 			if (len !== width) {
 				throw new Error("Invalid scanline");
 			}
-			if (!scanline) {
-				scanline = new Uint8Array(width * 4);
-			}
 
 			let count: number;
 			let value: number;
@@ -169,21 +154,26 @@ function read_hdr(uint8: Uint8Array, minComponent: number): HDRData {
 							throw new Error("Bad RLE data in HDR");
 						}
 						for (let z = 0; z < count; z++) {
-							scanline[i++ * 4 + k] = value;
+							// scanline[i++ * 4 + k] = value;
+							data[(j * width + i++) * 4 + k] = value;
 						}
 					} else {
 						if (count > nLeft) {
 							throw new Error("Bad RLE data in HDR");
 						}
 						for (let z = 0; z < count; z++) {
-							scanline[i++ * 4 + k] = uint8[pos++];
+							// scanline[i++ * 4 + k] = uint8[pos++];
+							data[(j * width + i++) * 4 + k] = uint8[pos++];
 						}
 					}
 				}
 			}
 
 			for (let i = 0; i < width; i++) {
-				rgbeToRGBA16(scanline.subarray(i * 4), data.subarray((j * width + i) * 4), minComponent);
+				const f1 = Math.pow(2.0, data[(i + j * width) * 4 + 3] - (128 + 8));
+				for (let h = 0; h < 3; h++) {
+					data[(j * width + i) * 4 + h] = toHalf(data[(j * width + i) * 4 + h] * f1, minComponent);
+				}
 			}
 		}
 	}

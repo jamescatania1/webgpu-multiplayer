@@ -69,7 +69,9 @@ fn compute_skybox(in: ComputeIn) {
 
     var uv = vec2<f32>(u, v) / 2.0 + 0.5;
 
-    let color: vec3<f32> = textureSampleLevel(u_rect_sky, u_rect_sky_sampler, uv, 0.0).rgb;
+    var color: vec3<f32> = textureSampleLevel(u_rect_sky, u_rect_sky_sampler, uv, 0.0).rgb;
+    // var rgb = color.rgb * pow(2.0, color.a * 256.0 - 128.0);
+    // rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(50.0));
 
     textureStore(u_cubemap, in.id.xy, in.id.z, vec4<f32>(color, 1.0));
 }

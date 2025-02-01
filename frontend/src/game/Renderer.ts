@@ -295,6 +295,49 @@ export default class Renderer {
 				count: 4,
 			},
 		});
+		const shadowDepthPipelineLayout = this.device.createPipelineLayout({
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.camera, transformBindGroupLayout, this.globalUniformBindGroupLayouts.shadows],
+		});
+		const shadowDepthRenderPipeline = this.device.createRenderPipeline({
+			label: "shadow depth pass pipeline",
+			layout: shadowDepthPipelineLayout,
+			vertex: {
+				module: this.shaders.shadows,
+				entryPoint: "vs",
+				buffers: [
+					{
+						arrayStride: 4 * 4,
+						stepMode: "vertex",
+						attributes: [
+							{
+								//xyzc
+								shaderLocation: 0,
+								offset: 0,
+								format: "uint32x2",
+							},
+						],
+					},
+				],
+			},
+			fragment: {
+				module: this.shaders.shadows,
+				entryPoint: "fs",
+				targets: [{ format: "r16float", writeMask: GPUColorWrite.RED }],
+			},
+			primitive: {
+				topology: "triangle-list",
+				cullMode: "back",
+			},
+			depthStencil: {
+				depthWriteEnabled: true,
+				depthCompare: "less-equal",
+				format: "depth32float",
+			},
+			multisample: {
+				count: 4,
+			},
+		});
+		
 		const PBRPipelineLayout = this.device.createPipelineLayout({
 			bindGroupLayouts: [
 				this.globalUniformBindGroupLayouts.camera,
