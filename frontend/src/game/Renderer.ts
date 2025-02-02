@@ -1,5 +1,5 @@
 import Camera from "./Camera";
-import { mat4, vec2, vec3, vec4, type Mat4, type Vec2, type Vec3 } from "wgpu-matrix";
+import { mat4, vec2, vec3, vec4, type Mat4, type Vec2, type Vec3, type Vec4 } from "wgpu-matrix";
 import type Input from "./Input";
 import type { RenderContext } from "./Game";
 import { loadShaders, type Shaders } from "./Shaders";
@@ -25,7 +25,7 @@ export const shadowSettings = {
 	size: 40,
 	near: 0.1,
 	far: 300.0,
-	bias: 0.0013,
+	bias: 0.001,
 	normalBias: 100.0,
 	pcfRadius: 3,
 };
@@ -763,41 +763,71 @@ export default class Renderer {
 
 	private shadowViewMatrix = mat4.create();
 	private shadowProjMatrix = mat4.create();
+	private clipCorners: Vec4[] = [
+		vec4.fromValues(-1, -1, 0, 1),
+		vec4.fromValues(-1, -1, 1, 1),
+		vec4.fromValues(-1, 1, 0, 1),
+		vec4.fromValues(-1, 1, 1, 1),
+		vec4.fromValues(1, -1, 0, 1),
+		vec4.fromValues(1, -1, 1, 1),
+		vec4.fromValues(1, 1, 0, 1),
+		vec4.fromValues(1, 1, 1, 1),
+	];
+	private corners: Vec4[] = [
+		vec4.fromValues(-1, -1, 0, 1.0),
+		vec4.fromValues(-1, -1, 1, 1.0),
+		vec4.fromValues(-1, 1, 0, 1.0),
+		vec4.fromValues(-1, 1, 1, 1.0),
+		vec4.fromValues(1, -1, 0, 1.0),
+		vec4.fromValues(1, -1, 1, 1.0),
+		vec4.fromValues(1, 1, 0, 1.0),
+		vec4.fromValues(1, 1, 1, 1.0),
+	];
+	private center = vec4.create();
+	private centerXYZ = vec3.create();
+	private up = vec3.fromValues(0, 1, 0);
+	private shadowEye = vec3.create();
+	private minComponents = vec3.create();
+	private maxComponents = vec3.create();
 	private updateShadowTransforms() {
 		const cascadeCount = 3;
 
-		const frustumCorners = [];
-		const center = vec4.create();
-
-		for (let x = -1; x <= 1; x += 2) {
-			for (let y = -1; y <= 1; y += 2) {
-				for (let z = 0; z <= 1; z++) {
-					const corner = mat4.multiply(this.camera.viewProjMatrixInverse, vec4.fromValues(x, y, z, 1.0));
-					vec4.divScalar(corner, corner[3], corner);
-					frustumCorners.push(corner);
-					vec4.add(center, corner, center);
-				}
-			}
+		vec4.zero(this.center);
+		this.center = vec3.create();
+		for (let i = 0; i < 8; i++) {
+			vec4.zero(this.corners[i]);
+			mat4.multiply(this.camera.viewProjMatrixInverse, this.clipCorners[i], this.corners[i]);
+			vec4.divScalar(this.corners[i], this.corners[i][3], this.corners[i]);
+			vec4.add(this.center, this.corners[i], this.center);
 		}
-		vec4.divScalar(center, 8, center);
-		const center3 = vec3.fromValues(center[0], center[1], center[2]);
-		mat4.lookAt(vec3.add(this.sky.sunDirection, center3), center3, vec3.fromValues(0, 1, 0), this.shadowViewMatrix);
+		vec4.divScalar(this.center, 8, this.center);
+		vec3.set(this.center[0], this.center[1], this.center[2], this.centerXYZ);
+		vec3.add(this.centerXYZ, this.sky.sunDirection, this.shadowEye);
+		mat4.lookAt(this.shadowEye, this.centerXYZ, this.up, this.shadowViewMatrix);
 
-		const minComponents = vec3.fromValues(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE);
-		const maxComponents = vec3.fromValues(Number.MIN_VALUE, Number.MIN_VALUE, Number.MIN_VALUE);
-		for (const corner of frustumCorners) {
+		vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);
+		vec3.set(-Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE, this.maxComponents);
+		for (const corner of this.corners) {
 			mat4.multiply(this.shadowViewMatrix, corner, corner);
 			for (let k = 0; k < 3; k++) {
-				minComponents[k] = Math.min(minComponents[k], corner[k]);
-				maxComponents[k] = Math.max(maxComponents[k], corner[k]);
+				this.minComponents[k] = Math.min(this.minComponents[k], corner[k]);
+				this.maxComponents[k] = Math.max(this.maxComponents[k], corner[k]);
 			}
 		}
 
-		const shadowZMultiplier = 10;
-		minComponents[2] *= (minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier);
-		maxComponents[2] *= (maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier);
-		
-		mat4.ortho(minComponents[0], maxComponents[0], minComponents[1], maxComponents[1], minComponents[2], maxComponents[2], this.shadowProjMatrix);
+		const shadowZMultiplier = 10.0;
+		this.minComponents[2] *= this.minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier;
+		this.maxComponents[2] *= this.maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier;
+
+		mat4.ortho(
+			this.minComponents[0],
+			this.maxComponents[0],
+			this.minComponents[1],
+			this.maxComponents[1],
+			this.minComponents[2],
+			this.maxComponents[2],
+			this.shadowProjMatrix,
+		);
 	}
 
 	public onLightingLoad() {
@@ -928,7 +958,6 @@ export default class Renderer {
 		this.globalUniformBindGroups.scene = sceneBindGroup;
 	}
 
-	private zz = false;
 	public draw(input: Input, deltaTime: number) {
 		// game logic
 		{
