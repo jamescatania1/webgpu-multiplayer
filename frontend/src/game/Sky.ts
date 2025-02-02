@@ -3,7 +3,7 @@ import Camera from "./Camera";
 import HDRjs from "./utils/hdr";
 import loadHDR from "./utils/hdr";
 import type { Shaders } from "./Shaders";
-import Renderer, { skySettings } from "./Renderer";
+import Renderer, { shadowSettings, skySettings } from "./Renderer";
 
 // export type PointLight = {
 // 	position: vec3;
@@ -34,18 +34,25 @@ export default class Sky {
 	public readonly sunColor = vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0));
 	public readonly sunIntensity = 0.75;
 	public readonly sunViewMatrix = mat4.create();
-	public readonly sunProjMatrix = mat4.ortho(-20, 20, -20, 20, 0.1, 100);
+	public readonly sunProjMatrix = mat4.ortho(
+		-shadowSettings.size / 2,
+		shadowSettings.size / 2,
+		-shadowSettings.size / 2,
+		shadowSettings.size / 2,
+		shadowSettings.near,
+		shadowSettings.far,
+	);
 
 	public skyboxRenderData: SkyboxRenderData | null = null;
 	public sceneRenderData: SceneData | null = null;
-	
+
 	private readonly camera: Camera;
 
 	constructor(renderer: Renderer, device: GPUDevice, camera: Camera, shaders: Shaders) {
 		let startTime: number;
 		if (this.debug) {
 			console.log("Loading skybox hdr...");
-			startTime = performance.now()
+			startTime = performance.now();
 		}
 
 		this.camera = camera;
@@ -53,7 +60,11 @@ export default class Sky {
 		// load the skybox hdr texture
 		loadHDR(`/${skySettings.skyboxSource}.hdr`, 100.0).then((hdr) => {
 			if (this.debug) {
-				console.log("Loaded hdr in ", (performance.now() - startTime).toFixed(2), "ms. Generating scene lighting maps...");
+				console.log(
+					"Loaded hdr in ",
+					(performance.now() - startTime).toFixed(2),
+					"ms. Generating scene lighting maps...",
+				);
 				startTime = performance.now();
 			}
 
@@ -123,7 +134,11 @@ export default class Sky {
 				const computePass = encoder.beginComputePass();
 				computePass.setPipeline(cubemapGeneratorPipeline);
 				computePass.setBindGroup(0, cubemapGeneratorBindGroup);
-				computePass.dispatchWorkgroups(Math.ceil(skySettings.skyboxResolution / 8), Math.ceil(skySettings.skyboxResolution / 8), 6);
+				computePass.dispatchWorkgroups(
+					Math.ceil(skySettings.skyboxResolution / 8),
+					Math.ceil(skySettings.skyboxResolution / 8),
+					6,
+				);
 				computePass.end();
 				device.queue.submit([encoder.finish()]);
 				this.skyboxRenderData = this.createSkyboxRenderData(device, shaders, skyboxCubemapTexture);
@@ -137,8 +152,8 @@ export default class Sky {
 					module: shaders.irradianceGenerator,
 					entryPoint: "compute_irradiance",
 					constants: {
-						delta: skySettings.irradianceSampleDelta
-					}
+						delta: skySettings.irradianceSampleDelta,
+					},
 				},
 			});
 			const irradianceTexture = device.createTexture({
@@ -188,7 +203,7 @@ export default class Sky {
 					entryPoint: "compute_prefilter",
 					constants: {
 						sample_count: skySettings.prefilterSamples,
-					}
+					},
 				},
 			});
 			const prefilterCubemapSampler = device.createSampler({
@@ -268,7 +283,7 @@ export default class Sky {
 					constants: {
 						sample_count: skySettings.brdfSamples,
 						lut_size: skySettings.brdfResolution,
-					}
+					},
 				},
 			});
 			const brdfLUT = device.createTexture({
@@ -293,15 +308,19 @@ export default class Sky {
 			const pass = encoder.beginComputePass();
 			pass.setPipeline(brdfGeneratorPipeline);
 			pass.setBindGroup(0, brdfGeneratorBindGroup);
-			pass.dispatchWorkgroups(Math.ceil(skySettings.brdfResolution / 8), Math.ceil(skySettings.brdfResolution / 8), 1);
+			pass.dispatchWorkgroups(
+				Math.ceil(skySettings.brdfResolution / 8),
+				Math.ceil(skySettings.brdfResolution / 8),
+				1,
+			);
 			pass.end();
 			device.queue.submit([encoder.finish()]);
-			
+
 			this.sceneRenderData = {
 				irradianceTexture: irradianceTexture,
 				prefilterTexture: prefilterTexture,
 				brdfTexture: brdfLUT,
-			}
+			};
 
 			if (this.debug) {
 				console.log("Generated scene lighting maps in ", (performance.now() - startTime).toFixed(2), "ms.");
@@ -312,7 +331,12 @@ export default class Sky {
 	}
 
 	public update(camera: Camera) {
-		mat4.lookAt(vec3.add(camera.position, this.sunPosition), camera.position, vec3.fromValues(0, 1, 0), this.sunViewMatrix);
+		mat4.lookAt(
+			vec3.add(camera.position, this.sunPosition),
+			camera.position,
+			vec3.fromValues(0, 1, 0),
+			this.sunViewMatrix,
+		);
 		// mat4.lookAt(this.sunPosition, vec3.fromValues(0,0,0), vec3.fromValues(0, 1, 0), this.sunViewMatrix);
 	}
 

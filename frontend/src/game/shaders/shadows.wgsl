@@ -1,5 +1,5 @@
-override near = 0.1;
-override far = 300.0;
+override shadow_far: f32;
+override bias: f32;
 
 struct ShadowData {
     view_matrix: mat4x4<f32>,
@@ -21,7 +21,6 @@ struct VertexIn {
 
 struct VertexOut {
     @builtin(position) pos: vec4f,
-    @location(0) view_pos: vec4f,
 };
 
 @vertex 
@@ -30,22 +29,13 @@ fn vs(in: VertexIn) -> VertexOut {
     let y: f32 = f32(in.vertex_xyzc.x & 0xFFFFu) / 65535.0 - 0.5;
     let z: f32 = f32(in.vertex_xyzc.y >> 16u) / 65535.0 - 0.5;
     let world_pos: vec4f = u_transform.model_matrix * vec4f(vec3f(x, y, z) * u_transform.model_scale + u_transform.model_offset, 1.0);
-    let view_pos: vec4f = u_shadow.view_matrix * world_pos;
-    let clip_pos: vec4f = u_shadow.proj_matrix * view_pos;
 
     var out: VertexOut;
-    out.pos = clip_pos;
-    out.view_pos = clip_pos;
+    out.pos = u_shadow.proj_matrix * (u_shadow.view_matrix * world_pos);
     return out;
-}
-
-fn linearize_depth(depth: f32) -> f32 {
-    return (2.0 * far * near) / (far + near - (depth * 2.0 - 1.0) * (far - near));
 }
 
 @fragment 
 fn fs(in: VertexOut) -> @location(0) vec4f {
-    // return vec4f(linearize_depth(in.pos.z) / far, 1.0, 1.0, 1.0);
-    
-    return vec4f(in.pos.z * 300.0, 1.0, 1.0, 1.0);
+    return vec4f((in.pos.z + bias) * shadow_far, 1.0, 1.0, 1.0);
 }

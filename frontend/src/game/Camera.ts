@@ -4,7 +4,7 @@ export default class Camera {
 	public position = vec3.create();
 	public fov = 85;
 	public near = 0.1;
-	public far = 300.0;
+	public far = 100.0;
 	public pitch = 0.0;
 	public yaw = 0.0;
 	public roll = 0.0;
@@ -16,6 +16,7 @@ export default class Camera {
 	public readonly projMatrix = mat4.create();
 	public readonly projMatrixInverse = mat4.create();
 	public readonly viewProjMatrix = mat4.create();
+	public readonly viewProjMatrixInverse = mat4.create();
 	public readonly rotProjMatrix = mat4.create();
 
 	constructor(canvas: HTMLCanvasElement) {
@@ -43,6 +44,7 @@ export default class Camera {
 		mat4.lookAt(this.position, vec3.add(this.position, this.forward, vec3.create()), this.up, this.viewMatrix);
 		mat4.mul(this.projMatrix, this.viewMatrix, this.viewProjMatrix);
 		mat4.invert(this.projMatrix, this.projMatrixInverse);
+		mat4.invert(this.viewProjMatrix, this.viewProjMatrixInverse);
 
 		mat4.lookAt(vec3.create(), this.forward, this.up, this.rotProjMatrix);
 		mat4.mul(this.projMatrix, this.rotProjMatrix, this.rotProjMatrix);

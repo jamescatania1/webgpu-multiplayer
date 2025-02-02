@@ -1,5 +1,5 @@
 import Camera from "./Camera";
-import { mat4, vec2, vec3, type Mat4, type Vec2, type Vec3 } from "wgpu-matrix";
+import { mat4, vec2, vec3, vec4, type Mat4, type Vec2, type Vec3 } from "wgpu-matrix";
 import type Input from "./Input";
 import type { RenderContext } from "./Game";
 import { loadShaders, type Shaders } from "./Shaders";
@@ -17,10 +17,18 @@ export const ssaoSettings = {
 	kernelDotCutOff: 0.025,
 	noiseTextureSize: 32,
 	noiseScale: 1000.0,
+	fadeStart: 45.0,
+	fadeEnd: 105.0,
 };
 export const shadowSettings = {
 	resolution: 2048,
-}
+	size: 40,
+	near: 0.1,
+	far: 300.0,
+	bias: 0.0013,
+	normalBias: 100.0,
+	pcfRadius: 3,
+};
 export const skySettings = {
 	skyboxSource: "sky",
 	skyboxResolution: 2048,
@@ -49,7 +57,7 @@ export default class Renderer {
 		scene: GPUBindGroupLayout;
 	};
 	private globalUniformBindGroups: {
-		camera: GPUBindGroup | null
+		camera: GPUBindGroup | null;
 		depth: GPUBindGroup | null;
 		scene: GPUBindGroup | null;
 		drawTexture: GPUBindGroup | null;
@@ -61,10 +69,10 @@ export default class Renderer {
 		postFX: GPURenderPipeline;
 	};
 	private renderPassDescriptors: {
-		depthPass: GPURenderPassDescriptor | null,
-		shadowPass: GPURenderPassDescriptor | null,
-		sceneDraw: GPURenderPassDescriptor | null,
-		postFX: GPURenderPassDescriptor | null,
+		depthPass: GPURenderPassDescriptor | null;
+		shadowPass: GPURenderPassDescriptor | null;
+		sceneDraw: GPURenderPassDescriptor | null;
+		postFX: GPURenderPassDescriptor | null;
 	};
 	private shadowmapTextureView: GPUTextureView | null = null;
 	private readonly presentationFormat: GPUTextureFormat;
@@ -136,11 +144,12 @@ export default class Renderer {
 					visibility: GPUShaderStage.FRAGMENT,
 					texture: {},
 				},
-				{ // screen size, can move elsewhere later
+				{
+					// screen size, can move elsewhere later
 					binding: 3,
 					visibility: GPUShaderStage.FRAGMENT,
 					buffer: {},
-				}
+				},
 			],
 		});
 		const sceneBindGroupLayout = this.device.createBindGroupLayout({
@@ -149,7 +158,7 @@ export default class Renderer {
 				{
 					binding: 0,
 					visibility: GPUShaderStage.FRAGMENT,
-					sampler: {}
+					sampler: {},
 				},
 				{
 					binding: 1,
@@ -159,7 +168,7 @@ export default class Renderer {
 				{
 					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
-					sampler: {}
+					sampler: {},
 				},
 				{
 					binding: 3,
@@ -172,7 +181,7 @@ export default class Renderer {
 					binding: 4,
 					visibility: GPUShaderStage.FRAGMENT,
 					texture: {
-						viewDimension: "cube"
+						viewDimension: "cube",
 					},
 				},
 				{
@@ -183,12 +192,12 @@ export default class Renderer {
 				{
 					binding: 6,
 					visibility: GPUShaderStage.FRAGMENT,
-					buffer: {}
+					buffer: {},
 				},
 				{
 					binding: 7,
 					visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.VERTEX,
-					buffer: {}
+					buffer: {},
 				},
 			],
 		});
@@ -281,6 +290,10 @@ export default class Renderer {
 				module: this.shaders.shadows,
 				entryPoint: "fs",
 				targets: [{ format: "r16float", writeMask: GPUColorWrite.RED }],
+				constants: {
+					shadow_far: shadowSettings.far,
+					bias: shadowSettings.bias,
+				},
 			},
 			primitive: {
 				topology: "triangle-list",
@@ -295,7 +308,7 @@ export default class Renderer {
 				count: 4,
 			},
 		});
-		
+
 		const PBRPipelineLayout = this.device.createPipelineLayout({
 			label: "PBR render pipeline layout",
 			bindGroupLayouts: [
@@ -337,6 +350,9 @@ export default class Renderer {
 						],
 					},
 				],
+				constants: {
+					shadow_normal_bias: shadowSettings.normalBias,
+				},
 			},
 			fragment: {
 				module: this.shaders.PBR,
@@ -347,6 +363,12 @@ export default class Renderer {
 					ssao_radius: ssaoSettings.radius,
 					ssao_bias: ssaoSettings.bias,
 					ssao_noise_scale: ssaoSettings.noiseScale,
+					ssao_fade_start: ssaoSettings.fadeStart,
+					ssao_fade_end: ssaoSettings.fadeEnd,
+					near: this.camera.near,
+					far: this.camera.far,
+					shadow_far: shadowSettings.far,
+					shadow_pcf_radius: shadowSettings.pcfRadius,
 				},
 			},
 			primitive: {
@@ -424,7 +446,11 @@ export default class Renderer {
 				},
 				{
 					binding: 1,
-					resource: { buffer: this.uniformBuffers.shadows, offset: 0, size: this.uniformBuffers.shadows.size },
+					resource: {
+						buffer: this.uniformBuffers.shadows,
+						offset: 0,
+						size: this.uniformBuffers.shadows.size,
+					},
 				},
 			],
 		});
@@ -466,12 +492,11 @@ export default class Renderer {
 			sceneDraw: null,
 			postFX: null,
 			shadowPass: null,
-		}
+		};
 		// create the shadow mapping textures and pass descriptor
 		this.buildShadowRenderDescriptor();
 		// create the output textures and render pass descriptor
 		this.buildScreenRenderDescriptors();
-
 
 		loadBOBJ(this.device, "/scene.bobj").then((data) => {
 			const model = new Model(this.device, this.camera, transformBindGroupLayout, data);
@@ -604,7 +629,7 @@ export default class Renderer {
 						offset: 0,
 						size: 2 * 4,
 					},
-				}
+				},
 			],
 		});
 
@@ -736,6 +761,45 @@ export default class Renderer {
 		};
 	}
 
+	private shadowViewMatrix = mat4.create();
+	private shadowProjMatrix = mat4.create();
+	private updateShadowTransforms() {
+		const cascadeCount = 3;
+
+		const frustumCorners = [];
+		const center = vec4.create();
+
+		for (let x = -1; x <= 1; x += 2) {
+			for (let y = -1; y <= 1; y += 2) {
+				for (let z = 0; z <= 1; z++) {
+					const corner = mat4.multiply(this.camera.viewProjMatrixInverse, vec4.fromValues(x, y, z, 1.0));
+					vec4.divScalar(corner, corner[3], corner);
+					frustumCorners.push(corner);
+					vec4.add(center, corner, center);
+				}
+			}
+		}
+		vec4.divScalar(center, 8, center);
+		const center3 = vec3.fromValues(center[0], center[1], center[2]);
+		mat4.lookAt(vec3.add(this.sky.sunDirection, center3), center3, vec3.fromValues(0, 1, 0), this.shadowViewMatrix);
+
+		const minComponents = vec3.fromValues(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE);
+		const maxComponents = vec3.fromValues(Number.MIN_VALUE, Number.MIN_VALUE, Number.MIN_VALUE);
+		for (const corner of frustumCorners) {
+			mat4.multiply(this.shadowViewMatrix, corner, corner);
+			for (let k = 0; k < 3; k++) {
+				minComponents[k] = Math.min(minComponents[k], corner[k]);
+				maxComponents[k] = Math.max(maxComponents[k], corner[k]);
+			}
+		}
+
+		const shadowZMultiplier = 10;
+		minComponents[2] *= (minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier);
+		maxComponents[2] *= (maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier);
+		
+		mat4.ortho(minComponents[0], maxComponents[0], minComponents[1], maxComponents[1], minComponents[2], maxComponents[2], this.shadowProjMatrix);
+	}
+
 	public onLightingLoad() {
 		const skyData = this.sky.sceneRenderData;
 		if (!skyData) {
@@ -845,7 +909,7 @@ export default class Renderer {
 					binding: 4,
 					resource: skyData.prefilterTexture.createView({
 						dimension: "cube",
-					})
+					}),
 				},
 				{
 					binding: 5,
@@ -858,12 +922,13 @@ export default class Renderer {
 				{
 					binding: 7,
 					resource: { buffer: lightingUniformBuffer, offset: 0, size: 2 * 4 * 4 },
-				}
+				},
 			],
 		});
 		this.globalUniformBindGroups.scene = sceneBindGroup;
 	}
 
+	private zz = false;
 	public draw(input: Input, deltaTime: number) {
 		// game logic
 		{
@@ -917,6 +982,8 @@ export default class Renderer {
 		// update sun
 		this.sky.update(this.camera);
 
+		this.updateShadowTransforms();
+
 		// update uniforms
 		{
 			// update camera buffer
@@ -940,24 +1007,24 @@ export default class Renderer {
 				this.camera.position.buffer,
 				this.camera.position.byteOffset,
 				this.camera.position.byteLength,
-			)
+			);
 
 			// update shadow camera buffer
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.shadows!,
 				0,
-				this.sky.sunViewMatrix.buffer,
-				this.sky.sunViewMatrix.byteOffset,
-				this.sky.sunViewMatrix.byteLength,
-			)
+				this.shadowViewMatrix.buffer,
+				this.shadowViewMatrix.byteOffset,
+				this.shadowViewMatrix.byteLength,
+			);
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.shadows!,
 				16 * 4,
-				this.sky.sunProjMatrix.buffer,
-				this.sky.sunProjMatrix.byteOffset,
-				this.sky.sunProjMatrix.byteLength,
-			)
-						
+				this.shadowProjMatrix.buffer,
+				this.shadowProjMatrix.byteOffset,
+				this.shadowProjMatrix.byteLength,
+			);
+
 			// rot proj matrix for the skybox
 			if (this.sky.skyboxRenderData) {
 				this.device.queue.writeBuffer(
@@ -966,10 +1033,9 @@ export default class Renderer {
 					this.camera.rotProjMatrix.buffer,
 					this.camera.rotProjMatrix.byteOffset,
 					this.camera.rotProjMatrix.byteLength,
-				)
+				);
 			}
 		}
-
 
 		(this.renderPassDescriptors.postFX!.colorAttachments as any)[0].resolveTarget = this.ctx
 			.getCurrentTexture()
@@ -981,7 +1047,7 @@ export default class Renderer {
 			const shadowPass = encoder.beginRenderPass(this.renderPassDescriptors.shadowPass!);
 			shadowPass.setPipeline(this.pipelines.shadows);
 			shadowPass.setBindGroup(0, this.globalUniformBindGroups.camera!);
-			
+
 			for (const model of this.objects) {
 				shadowPass.setBindGroup(1, model.transformUniformBindGroup);
 				shadowPass.setVertexBuffer(0, model.modelData.vertexBuffer);

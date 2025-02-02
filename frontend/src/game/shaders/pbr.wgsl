@@ -1,11 +1,14 @@
-override ssao_samples: i32 = 64;
-override ssao_radius: f32 = 0.5;
-override ssao_bias: f32 = 0.05;
-override ssao_noise_scale: f32 = 100.0;
-override ssao_fade_start: f32 = 45.0;
-override ssao_fade_end: f32 = 105.0;
-override near: f32 = 0.1;
-override far: f32 = 300.0;
+override ssao_samples: i32;
+override ssao_radius: f32;
+override ssao_bias: f32;
+override ssao_noise_scale: f32;
+override ssao_fade_start: f32;
+override ssao_fade_end: f32;
+override near: f32;
+override far: f32;
+override shadow_far: f32;
+override shadow_normal_bias: f32;
+override shadow_pcf_radius: i32;
 
 struct CameraData {
     view_matrix: mat4x4<f32>,
@@ -88,26 +91,33 @@ fn vs(in: VertexIn) -> VertexOut {
     let nx: f32 = f32(in.vertex_normal >> 22u) / 511.5 - 1.0;
     let ny: f32 = f32((in.vertex_normal >> 12u) & 0x3FFu) / 511.5 - 1.0;
     let nz: f32 = f32((in.vertex_normal >> 2u) & 0x3FFu) / 511.5 - 1.0;
-    let n = u_transform.normal_matrix * vec3<f32>(nx, ny, nz);
+    let normal = u_transform.normal_matrix * vec3<f32>(nx, ny, nz);
 
     let u: f32 = f32(in.vertex_uv >> 16u) / 65535.0;
     let v: f32 = f32(in.vertex_uv & 0xFFFFu) / 65535.0;
 
-    let shadow_offset_pos: vec4<f32> = world_pos + vec4<f32>(n * (1.0 - abs(dot(n, -normalize(u_lighting.sun_direction)))) * 0.05, 0.0);
-    let shadow_clip_pos: vec4<f32> = u_shadow.proj_matrix * (u_shadow.view_matrix * shadow_offset_pos);
+    // bias the shadowmap sample based on the world normals
+    let n: vec3<f32> = normalize(normal);
+    let cos_lo = dot(normalize(u_lighting.sun_direction), n);
+    let offset_normal_scale = shadow_normal_bias / 2048.0;
+    let shadow_offset = vec4<f32>(n * offset_normal_scale, 0.0);
+    var shadow_clip_pos: vec4<f32> = u_shadow.proj_matrix * (u_shadow.view_matrix * world_pos);
+    var shadow_uv_offset_pos: vec4<f32> = u_shadow.proj_matrix * (u_shadow.view_matrix * (world_pos + shadow_offset));
+    shadow_clip_pos = vec4<f32>(shadow_uv_offset_pos.xy, shadow_clip_pos.zw);
     
     var out: VertexOut;
     out.pos = clip_pos;
     out.view_pos = view_pos;
     out.world_pos = vec3<f32>(world_pos.xyz);
-    out.normal = n;
-    out.view_normal = (u_global.view_matrix * (u_transform.model_matrix * vec4<f32>(nx, ny, nz, 0.0))).xyz;
+    out.normal = normal;
+    out.view_normal = (u_global.view_matrix * (u_transform.model_matrix * vec4<f32>(normal.xyz, 0.0))).xyz;
     out.uv = vec2<f32>(u, v);
     out.screen_uv = (clip_pos.xy / clip_pos.w) * 0.5 + 0.5;
     out.screen_uv.y = 1.0 - out.screen_uv.y;
     out.color = vec3<f32>(r, g, b);
     out.vertex_pos_hash = vec2<f32>(x + y, z + x);
     out.shadow_clip_pos = shadow_clip_pos;
+    // out.shadow_clip_pos = u_shadow.proj_matrix * (u_shadow.view_matrix * world_pos);
     return out;
 }
 
@@ -150,21 +160,18 @@ fn shadow(shadow_clip_pos: vec4<f32>, normal: vec3<f32>) -> f32 {
     var shadowmap_pos: vec2<f32> = shadow_clip_pos.xy / shadow_clip_pos.w;
     shadowmap_pos = shadowmap_pos * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
 
-    const bias_factor: f32 = 0.0015 * 0.0;
-    const pcf_radius: i32 = 4;
-
     // let n_dot_l: f32 = dot(normal, u_lighting.sun_direction);
     let texel_size: vec2<f32> = vec2<f32>(1.0) / vec2<f32>(textureDimensions(u_shadowmap).xy);
     var res: f32 = 0.0;
-    for (var i: i32 = -pcf_radius; i <= pcf_radius; i++) {
-        for (var j: i32 = -pcf_radius; j <= pcf_radius; j++) {
-            let sample_depth = textureSample(u_shadowmap, u_depth_sampler, shadowmap_pos + vec2<f32>(f32(i), f32(j)) * texel_size).r / 300.0;
+    for (var i: i32 = -shadow_pcf_radius; i <= shadow_pcf_radius; i++) {
+        for (var j: i32 = -shadow_pcf_radius; j <= shadow_pcf_radius; j++) {
+            let sample_depth = textureSample(u_shadowmap, u_depth_sampler, shadowmap_pos + vec2<f32>(f32(i), f32(j)) * texel_size).r / shadow_far;
             if (sample_depth < frag_depth) {
                 res += 1.0;
             }
         }
     }
-    res /= f32((2 * pcf_radius + 1) * (2 * pcf_radius + 1));
+    res /= f32((2 * shadow_pcf_radius + 1) * (2 * shadow_pcf_radius + 1));
     if (shadowmap_pos.x < 0.0 || shadowmap_pos.x > 1.0 || shadowmap_pos.y < 0.0 || shadowmap_pos.y > 1.0 || frag_depth > 1.0) {
         res *= 0.0;
     }
