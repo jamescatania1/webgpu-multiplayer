@@ -22,13 +22,39 @@ export const ssaoSettings = {
 };
 export const shadowSettings = {
 	resolution: 2048,
-	size: 40,
-	near: 0.1,
-	far: 300.0,
-	bias: 0.001,
-	normalBias: 100.0,
-	pcfRadius: 3,
+	cascades: [
+		{
+			depthScale: 300.0,
+			near: 0.1,
+			far: 10.0,
+			bias: 0.001,
+			normalBias: 100.0,
+			pcfRadius: 3,
+		},
+		{
+			depthScale: 300.0,
+			near: 10.0,
+			far: 50.0,
+			bias: 0.001,
+			normalBias: 100.0,
+			pcfRadius: 3,
+		},
+		{
+			depthScale: 300.0,
+			near: 50.0,
+			far: 150.0,
+			bias: 0.001,
+			normalBias: 100.0,
+			pcfRadius: 3,
+		},
+	]
 };
+export const sunSettings = {
+	position: vec3.fromValues(20, 50, 17),
+	direction: vec3.normalize(vec3.fromValues(20, 50, 17)),
+	color: vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0)),
+	intensity: 0.75,
+}
 export const skySettings = {
 	skyboxSource: "sky",
 	skyboxResolution: 2048,
@@ -50,7 +76,12 @@ export default class Renderer {
 	private readonly uniformBuffers: {
 		camera: GPUBuffer;
 		shadows: GPUBuffer;
+		shadowCascadeIndex: GPUBuffer;
 	};
+	private readonly uniformBufferData: {
+		camera: Float32Array;
+		shadows: Float32Array;
+	}
 	private globalUniformBindGroupLayouts: {
 		camera: GPUBindGroupLayout;
 		depth: GPUBindGroupLayout;
@@ -74,7 +105,9 @@ export default class Renderer {
 		sceneDraw: GPURenderPassDescriptor | null;
 		postFX: GPURenderPassDescriptor | null;
 	};
-	private shadowmapTextureView: GPUTextureView | null = null;
+	private shadowData: {
+		texture: GPUTexture | null;
+	};
 	private readonly presentationFormat: GPUTextureFormat;
 
 	private readonly shaders: Shaders;
@@ -101,14 +134,17 @@ export default class Renderer {
 
 		this.camera = new Camera(canvas);
 		this.camera.position[2] = 5.0;
-
+		
 		this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 		this.ctx.configure({
 			device: this.device,
 			format: this.presentationFormat,
 		});
-
+		
 		this.sky = new Sky(this, this.device, this.camera, this.shaders);
+		this.shadowData = {
+			texture: null,
+		};
 
 		// uniform bind group layouts
 		const cameraBindGroupLayout = this.device.createBindGroupLayout({
@@ -124,6 +160,11 @@ export default class Renderer {
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: {},
 				},
+				{
+					binding: 2,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					buffer: {},
+				}
 			],
 		});
 		const depthBindGroupLayout = this.device.createBindGroupLayout({
@@ -142,7 +183,9 @@ export default class Renderer {
 				{
 					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
-					texture: {},
+					texture: {
+						viewDimension: "2d-array",
+					},
 				},
 				{
 					// screen size, can move elsewhere later
@@ -290,10 +333,6 @@ export default class Renderer {
 				module: this.shaders.shadows,
 				entryPoint: "fs",
 				targets: [{ format: "r16float", writeMask: GPUColorWrite.RED }],
-				constants: {
-					shadow_far: shadowSettings.far,
-					bias: shadowSettings.bias,
-				},
 			},
 			primitive: {
 				topology: "triangle-list",
@@ -350,9 +389,6 @@ export default class Renderer {
 						],
 					},
 				],
-				constants: {
-					shadow_normal_bias: shadowSettings.normalBias,
-				},
 			},
 			fragment: {
 				module: this.shaders.PBR,
@@ -367,8 +403,6 @@ export default class Renderer {
 					ssao_fade_end: ssaoSettings.fadeEnd,
 					near: this.camera.near,
 					far: this.camera.far,
-					shadow_far: shadowSettings.far,
-					shadow_pcf_radius: shadowSettings.pcfRadius,
 				},
 			},
 			primitive: {
@@ -431,11 +465,20 @@ export default class Renderer {
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			}),
 			shadows: this.device.createBuffer({
-				label: "shadow camera uniform buffer",
-				size: 32 * 4,
+				label: "shadow cascades uniform buffer",
+				size: shadowSettings.cascades.length * 36 * 4,
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			}),
+			shadowCascadeIndex: this.device.createBuffer({
+				label: "shadow cascade index uniform buffer",
+				size: 4,
+				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+			})
 		};
+		this.uniformBufferData = {
+			camera: new Float32Array(this.uniformBuffers.camera.size / 4),
+			shadows: new Float32Array(this.uniformBuffers.shadows.size / 4),
+		}
 
 		const cameraBindGroup = this.device.createBindGroup({
 			layout: this.globalUniformBindGroupLayouts.camera,
@@ -452,6 +495,14 @@ export default class Renderer {
 						size: this.uniformBuffers.shadows.size,
 					},
 				},
+				{
+					binding: 2,
+					resource: {
+						buffer: this.uniformBuffers.shadowCascadeIndex,
+						offset: 0,
+						size: this.uniformBuffers.shadowCascadeIndex.size,
+					}
+				}
 			],
 		});
 
@@ -508,7 +559,7 @@ export default class Renderer {
 	 * Called upon initialization and change of the canvas size
 	 **/
 	private buildScreenRenderDescriptors() {
-		if (!this.shadowmapTextureView) {
+		if (!this.shadowData.texture) {
 			return;
 		}
 
@@ -620,7 +671,7 @@ export default class Renderer {
 				},
 				{
 					binding: 2,
-					resource: this.shadowmapTextureView,
+					resource: this.shadowData.texture.createView(),
 				},
 				{
 					binding: 3,
@@ -728,18 +779,16 @@ export default class Renderer {
 			format: "r16float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
-		const depthDrawView = depthDrawTexture.createView();
 
 		// resolve depth texture to be able to sample in rendering
 		const depthResolveTexture = this.device.createTexture({
 			label: "shadow resolve depth draw texture",
-			size: [shadowSettings.resolution, shadowSettings.resolution],
+			size: [shadowSettings.resolution, shadowSettings.resolution, shadowSettings.cascades.length],
 			sampleCount: 1,
 			format: "r16float",
 			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
 		});
-		const depthResolveView = depthResolveTexture.createView();
-		this.shadowmapTextureView = depthResolveView;
+		this.shadowData.texture = depthResolveTexture;
 
 		this.renderPassDescriptors.shadowPass = {
 			label: "shadow pass descriptor",
@@ -748,8 +797,12 @@ export default class Renderer {
 					clearValue: [1.0, 1.0, 1.0, 1.0],
 					loadOp: "clear",
 					storeOp: "store",
-					view: depthDrawView,
-					resolveTarget: depthResolveView,
+					view: depthDrawTexture.createView(),
+					resolveTarget: depthResolveTexture.createView({
+						baseArrayLayer: 0,
+						arrayLayerCount: 1,
+						dimension: "2d",
+					}),
 				},
 			],
 			depthStencilAttachment: {
@@ -759,75 +812,6 @@ export default class Renderer {
 				depthStoreOp: "store",
 			},
 		};
-	}
-
-	private shadowViewMatrix = mat4.create();
-	private shadowProjMatrix = mat4.create();
-	private clipCorners: Vec4[] = [
-		vec4.fromValues(-1, -1, 0, 1),
-		vec4.fromValues(-1, -1, 1, 1),
-		vec4.fromValues(-1, 1, 0, 1),
-		vec4.fromValues(-1, 1, 1, 1),
-		vec4.fromValues(1, -1, 0, 1),
-		vec4.fromValues(1, -1, 1, 1),
-		vec4.fromValues(1, 1, 0, 1),
-		vec4.fromValues(1, 1, 1, 1),
-	];
-	private corners: Vec4[] = [
-		vec4.fromValues(-1, -1, 0, 1.0),
-		vec4.fromValues(-1, -1, 1, 1.0),
-		vec4.fromValues(-1, 1, 0, 1.0),
-		vec4.fromValues(-1, 1, 1, 1.0),
-		vec4.fromValues(1, -1, 0, 1.0),
-		vec4.fromValues(1, -1, 1, 1.0),
-		vec4.fromValues(1, 1, 0, 1.0),
-		vec4.fromValues(1, 1, 1, 1.0),
-	];
-	private center = vec4.create();
-	private centerXYZ = vec3.create();
-	private up = vec3.fromValues(0, 1, 0);
-	private shadowEye = vec3.create();
-	private minComponents = vec3.create();
-	private maxComponents = vec3.create();
-	private updateShadowTransforms() {
-		const cascadeCount = 3;
-
-		vec4.zero(this.center);
-		this.center = vec3.create();
-		for (let i = 0; i < 8; i++) {
-			vec4.zero(this.corners[i]);
-			mat4.multiply(this.camera.viewProjMatrixInverse, this.clipCorners[i], this.corners[i]);
-			vec4.divScalar(this.corners[i], this.corners[i][3], this.corners[i]);
-			vec4.add(this.center, this.corners[i], this.center);
-		}
-		vec4.divScalar(this.center, 8, this.center);
-		vec3.set(this.center[0], this.center[1], this.center[2], this.centerXYZ);
-		vec3.add(this.centerXYZ, this.sky.sunDirection, this.shadowEye);
-		mat4.lookAt(this.shadowEye, this.centerXYZ, this.up, this.shadowViewMatrix);
-
-		vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);
-		vec3.set(-Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE, this.maxComponents);
-		for (const corner of this.corners) {
-			mat4.multiply(this.shadowViewMatrix, corner, corner);
-			for (let k = 0; k < 3; k++) {
-				this.minComponents[k] = Math.min(this.minComponents[k], corner[k]);
-				this.maxComponents[k] = Math.max(this.maxComponents[k], corner[k]);
-			}
-		}
-
-		const shadowZMultiplier = 10.0;
-		this.minComponents[2] *= this.minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier;
-		this.maxComponents[2] *= this.maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier;
-
-		mat4.ortho(
-			this.minComponents[0],
-			this.maxComponents[0],
-			this.minComponents[1],
-			this.maxComponents[1],
-			this.minComponents[2],
-			this.maxComponents[2],
-			this.shadowProjMatrix,
-		);
 	}
 
 	public onLightingLoad() {
@@ -892,9 +876,9 @@ export default class Renderer {
 			mappedAtCreation: true,
 		});
 		const lightingBufferData = new Float32Array(2 * 4);
-		lightingBufferData.set(this.sky.sunDirection, 0);
-		lightingBufferData.set(this.sky.sunColor, 4);
-		lightingBufferData[7] = this.sky.sunIntensity;
+		lightingBufferData.set(sunSettings.direction, 0);
+		lightingBufferData.set(sunSettings.color, 4);
+		lightingBufferData[7] = sunSettings.intensity;
 		new Float32Array(lightingUniformBuffer.getMappedRange()).set(lightingBufferData);
 		lightingUniformBuffer.unmap();
 
@@ -1011,47 +995,36 @@ export default class Renderer {
 		// update sun
 		this.sky.update(this.camera);
 
-		this.updateShadowTransforms();
-
 		// update uniforms
 		{
 			// update camera buffer
+			this.uniformBufferData.camera.set(this.camera.viewMatrix, 0);
+			this.uniformBufferData.camera.set(this.camera.projMatrix, 16);
+			this.uniformBufferData.camera.set(this.camera.position, 32);
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.camera,
 				0,
-				this.camera.viewMatrix.buffer,
-				this.camera.viewMatrix.byteOffset,
-				this.camera.viewMatrix.byteLength,
-			);
-			this.device.queue.writeBuffer(
-				this.uniformBuffers.camera,
-				16 * 4,
-				this.camera.projMatrix.buffer,
-				this.camera.projMatrix.byteOffset,
-				this.camera.projMatrix.byteLength,
-			);
-			this.device.queue.writeBuffer(
-				this.uniformBuffers.camera,
-				32 * 4,
-				this.camera.position.buffer,
-				this.camera.position.byteOffset,
-				this.camera.position.byteLength,
+				this.uniformBufferData.camera.buffer,
+				this.uniformBufferData.camera.byteOffset,
+				this.uniformBufferData.camera.byteLength,
 			);
 
 			// update shadow camera buffer
+			const cascadeSize = this.uniformBufferData.shadows.length / shadowSettings.cascades.length;
+			for (let i = 0; i < shadowSettings.cascades.length; i++) {
+				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].view, i * cascadeSize + 0);
+				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].proj, i * cascadeSize + 16);
+				this.uniformBufferData.shadows[i * cascadeSize + 32] = shadowSettings.cascades[i].depthScale;
+				this.uniformBufferData.shadows[i * cascadeSize + 33] = shadowSettings.cascades[i].bias;
+				this.uniformBufferData.shadows[i * cascadeSize + 34] = shadowSettings.cascades[i].normalBias;
+				this.uniformBufferData.shadows[i * cascadeSize + 35] = shadowSettings.cascades[i].pcfRadius;
+			}
 			this.device.queue.writeBuffer(
-				this.uniformBuffers.shadows!,
+				this.uniformBuffers.shadows,
 				0,
-				this.shadowViewMatrix.buffer,
-				this.shadowViewMatrix.byteOffset,
-				this.shadowViewMatrix.byteLength,
-			);
-			this.device.queue.writeBuffer(
-				this.uniformBuffers.shadows!,
-				16 * 4,
-				this.shadowProjMatrix.buffer,
-				this.shadowProjMatrix.byteOffset,
-				this.shadowProjMatrix.byteLength,
+				this.uniformBufferData.shadows.buffer,
+				this.uniformBufferData.shadows.byteOffset,
+				this.uniformBufferData.shadows.byteLength,
 			);
 
 			// rot proj matrix for the skybox

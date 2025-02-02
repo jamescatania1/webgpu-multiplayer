@@ -3,7 +3,7 @@ import Camera from "./Camera";
 import HDRjs from "./utils/hdr";
 import loadHDR from "./utils/hdr";
 import type { Shaders } from "./Shaders";
-import Renderer, { shadowSettings, skySettings } from "./Renderer";
+import Renderer, { skySettings } from "./Renderer";
 
 // export type PointLight = {
 // 	position: vec3;
@@ -33,15 +33,6 @@ export default class Sky {
 	public readonly sunDirection = vec3.normalize(this.sunPosition);
 	public readonly sunColor = vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0));
 	public readonly sunIntensity = 0.75;
-	public readonly sunViewMatrix = mat4.create();
-	public readonly sunProjMatrix = mat4.ortho(
-		-shadowSettings.size / 2,
-		shadowSettings.size / 2,
-		-shadowSettings.size / 2,
-		shadowSettings.size / 2,
-		shadowSettings.near,
-		shadowSettings.far,
-	);
 
 	public skyboxRenderData: SkyboxRenderData | null = null;
 	public sceneRenderData: SceneData | null = null;
@@ -331,12 +322,12 @@ export default class Sky {
 	}
 
 	public update(camera: Camera) {
-		mat4.lookAt(
-			vec3.add(camera.position, this.sunPosition),
-			camera.position,
-			vec3.fromValues(0, 1, 0),
-			this.sunViewMatrix,
-		);
+		// mat4.lookAt(
+		// 	vec3.add(camera.position, this.sunPosition),
+		// 	camera.position,
+		// 	vec3.fromValues(0, 1, 0),
+		// 	this.sunViewMatrix,
+		// );
 		// mat4.lookAt(this.sunPosition, vec3.fromValues(0,0,0), vec3.fromValues(0, 1, 0), this.sunViewMatrix);
 	}
 

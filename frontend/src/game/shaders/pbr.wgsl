@@ -6,9 +6,7 @@ override ssao_fade_start: f32;
 override ssao_fade_end: f32;
 override near: f32;
 override far: f32;
-override shadow_far: f32;
-override shadow_normal_bias: f32;
-override shadow_pcf_radius: i32;
+// override shadow_cascades: i32;
 
 struct CameraData {
     view_matrix: mat4x4<f32>,
@@ -19,8 +17,12 @@ struct CameraData {
 struct ShadowData {
     view_matrix: mat4x4<f32>,
     proj_matrix: mat4x4<f32>,
+    depth_scale: f32,
+    bias: f32,
+    normal_bias: f32,
+    pcf_radius: i32,
 }
-@group(0) @binding(1) var<uniform> u_shadow: ShadowData;
+@group(0) @binding(1) var<uniform> u_shadow: array<ShadowData, TEMPL_shadow_cascades>;
 
 struct TransformData {
     model_matrix: mat4x4<f32>,
@@ -32,7 +34,7 @@ struct TransformData {
 
 @group(2) @binding(0) var u_depth_sampler: sampler;
 @group(2) @binding(1) var u_depth: texture_2d<f32>;
-@group(2) @binding(2) var u_shadowmap: texture_2d<f32>;
+@group(2) @binding(2) var u_shadowmap: texture_2d_array<f32>;
 @group(2) @binding(3) var<uniform> u_screen_size: vec2<f32>;
 
 @group(3) @binding(0) var u_ssao_noise_sampler: sampler;
@@ -99,10 +101,10 @@ fn vs(in: VertexIn) -> VertexOut {
     // bias the shadowmap sample based on the world normals
     let n: vec3<f32> = normalize(normal);
     let cos_lo = dot(normalize(u_lighting.sun_direction), n);
-    let offset_normal_scale = shadow_normal_bias / 2048.0;
+    let offset_normal_scale = u_shadow[0].normal_bias / 2048.0;
     let shadow_offset = vec4<f32>(n * offset_normal_scale, 0.0);
-    var shadow_clip_pos: vec4<f32> = u_shadow.proj_matrix * (u_shadow.view_matrix * world_pos);
-    var shadow_uv_offset_pos: vec4<f32> = u_shadow.proj_matrix * (u_shadow.view_matrix * (world_pos + shadow_offset));
+    var shadow_clip_pos: vec4<f32> = u_shadow[0].proj_matrix * (u_shadow[0].view_matrix * world_pos);
+    var shadow_uv_offset_pos: vec4<f32> = u_shadow[0].proj_matrix * (u_shadow[0].view_matrix * (world_pos + shadow_offset));
     shadow_clip_pos = vec4<f32>(shadow_uv_offset_pos.xy, shadow_clip_pos.zw);
     
     var out: VertexOut;
@@ -163,9 +165,10 @@ fn shadow(shadow_clip_pos: vec4<f32>, normal: vec3<f32>) -> f32 {
     // let n_dot_l: f32 = dot(normal, u_lighting.sun_direction);
     let texel_size: vec2<f32> = vec2<f32>(1.0) / vec2<f32>(textureDimensions(u_shadowmap).xy);
     var res: f32 = 0.0;
+    let shadow_pcf_radius: i32 = u_shadow[0].pcf_radius;
     for (var i: i32 = -shadow_pcf_radius; i <= shadow_pcf_radius; i++) {
         for (var j: i32 = -shadow_pcf_radius; j <= shadow_pcf_radius; j++) {
-            let sample_depth = textureSample(u_shadowmap, u_depth_sampler, shadowmap_pos + vec2<f32>(f32(i), f32(j)) * texel_size).r / shadow_far;
+            let sample_depth = textureSample(u_shadowmap, u_depth_sampler, shadowmap_pos + vec2<f32>(f32(i), f32(j)) * texel_size, 0).r / u_shadow[0].depth_scale;
             if (sample_depth < frag_depth) {
                 res += 1.0;
             }

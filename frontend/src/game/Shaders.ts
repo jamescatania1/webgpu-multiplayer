@@ -8,7 +8,7 @@ import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
 import { default as irradianceGeneratorSource } from "./shaders/irradiance_gen.wgsl";
 import { default as prefilterGeneratorSource } from "./shaders/prefilter_gen.wgsl";
 import { default as brdfGeneratorSource } from "./shaders/brdf_gen.wgsl";
-import { ssaoSettings } from "./Renderer";
+import { shadowSettings, ssaoSettings } from "./Renderer";
 
 export type Shaders = {
 	basic: GPUShaderModule;
@@ -39,6 +39,7 @@ export function loadShaders(device: GPUDevice): Shaders {
 		code: PBRShaderSource,
 		templates: {
 			"ssao_samples": Math.round(ssaoSettings.sampleCount).toString(),
+			"shadow_cascades": Math.round(shadowSettings.cascades.length).toString(),
 		},
 	});
 	const depth = loadShader(device, {
@@ -48,6 +49,9 @@ export function loadShaders(device: GPUDevice): Shaders {
 	const shadows = loadShader(device, {
 		label: "shadow pass shader",
 		code: shadowShaderSource,
+		templates: {
+			"shadow_cascades": Math.round(shadowSettings.cascades.length).toString(),
+		}
 	});
 	const skybox = loadShader(device, {
 		label: "skybox draw shader",
