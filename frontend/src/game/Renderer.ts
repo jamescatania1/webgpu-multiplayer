@@ -27,25 +27,25 @@ export const shadowSettings = {
 			depthScale: 300.0,
 			near: 0.1,
 			far: 10.0,
-			bias: 0.0008,
-			normalBias: 450.0,
-			pcfRadius: 4,
+			bias: 0.0001,
+			normalBias: 0.1,
+			pcfRadius: 3,
 		},
 		{
 			depthScale: 300.0,
-			near: 10,
+			near: 8.1,
 			far: 30.0,
-			bias: 0.0006,
-			normalBias: 500.0,
-			pcfRadius: 3,
+			bias: 0.00015,
+			normalBias: 0.15,
+			pcfRadius: 2,
 		},
 		{
 			depthScale: 300.0,
-			near: 30,
-			far: 150.0,
-			bias: 0.001,
-			normalBias: 400.0,
-			pcfRadius: 3,
+			near: 25.0,
+			far: 100.0,
+			bias: 0.0001,
+			normalBias: 0.15,
+			pcfRadius: 1,
 		},
 	],
 };
@@ -134,7 +134,7 @@ export default class Renderer {
 		this.shaders = loadShaders(this.device);
 
 		this.camera = new Camera(canvas);
-		this.camera.position[2] = 5.0;
+		this.camera.position[1] = 5.0;
 
 		this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 		this.ctx.configure({
@@ -191,6 +191,7 @@ export default class Renderer {
 					visibility: GPUShaderStage.FRAGMENT,
 					texture: {
 						viewDimension: "2d-array",
+						sampleType: "depth",
 					},
 				},
 				{
@@ -202,7 +203,7 @@ export default class Renderer {
 			],
 		});
 		const sceneBindGroupLayout = this.device.createBindGroupLayout({
-			label: "ssao bind group layout",
+			label: "scene render bind group layout",
 			entries: [
 				{
 					binding: 0,
@@ -248,6 +249,13 @@ export default class Renderer {
 					visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.VERTEX,
 					buffer: {},
 				},
+				{
+					binding: 8,
+					visibility: GPUShaderStage.FRAGMENT,
+					sampler: {
+						type: "comparison",
+					}
+				}
 			],
 		});
 		this.globalUniformBindGroupLayouts = {
@@ -339,19 +347,18 @@ export default class Renderer {
 			fragment: {
 				module: this.shaders.shadows,
 				entryPoint: "fs",
-				targets: [{ format: "r16float", writeMask: GPUColorWrite.RED }],
+				targets: [],
 			},
 			primitive: {
 				topology: "triangle-list",
 				cullMode: "back",
 			},
 			depthStencil: {
+				depthBias: 0.05,
+				depthBiasSlopeScale: 2.0,
 				depthWriteEnabled: true,
-				depthCompare: "less-equal",
+				depthCompare: "less",
 				format: "depth32float",
-			},
-			multisample: {
-				count: 4,
 			},
 		});
 
@@ -563,7 +570,7 @@ export default class Renderer {
 		// create the output textures and render pass descriptor
 		this.buildScreenRenderDescriptors();
 
-		loadBOBJ(this.device, "/scene.bobj").then((data) => {
+		loadBOBJ(this.device, "/city.bobj").then((data) => {
 			const model = new Model(this.device, this.camera, transformBindGroupLayout, data);
 			this.objects.push(model);
 		});
@@ -780,51 +787,24 @@ export default class Renderer {
 		// shadow depth texture used while rendering
 		const depthTexture = this.device.createTexture({
 			label: "shadow depth texture",
-			size: [shadowSettings.resolution, shadowSettings.resolution],
-			sampleCount: 4,
-			format: "depth32float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT,
-		});
-		const depthView = depthTexture.createView();
-
-		// resolve depth texture to be able to sample in rendering
-		const depthResolveTexture = this.device.createTexture({
-			label: "shadow resolve depth draw texture",
 			size: [shadowSettings.resolution, shadowSettings.resolution, shadowSettings.cascades.length],
-			sampleCount: 1,
-			format: "r16float",
+			format: "depth32float",
 			dimension: "2d",
-			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
-		this.shadowData.texture = depthResolveTexture;
+		this.shadowData.texture = depthTexture;
 
 		this.renderPassDescriptors.shadowPass = [];
 		for (let i = 0; i < shadowSettings.cascades.length; i++) {
-			// the depth texture drawn to by the shadow pass
-			const depthDrawTexture = this.device.createTexture({
-				label: `shadow draw depth texture - cascade #${i}`,
-				size: [shadowSettings.resolution, shadowSettings.resolution],
-				sampleCount: 4,
-				format: "r16float",
-				usage: GPUTextureUsage.RENDER_ATTACHMENT,
-			});
 			this.renderPassDescriptors.shadowPass.push({
 				label: `shadow pass descriptor - cascade #${i}`,
-				colorAttachments: [
-					{
-						clearValue: [1.0, 1.0, 1.0, 1.0],
-						loadOp: "clear",
-						storeOp: "store",
-						view: depthDrawTexture.createView(),
-						resolveTarget: depthResolveTexture.createView({
-							baseArrayLayer: i,
-							arrayLayerCount: 1,
-							dimension: "2d",
-						}),
-					},
-				],
+				colorAttachments: [],
 				depthStencilAttachment: {
-					view: depthView,
+					view: depthTexture.createView({
+						baseArrayLayer: i,
+						arrayLayerCount: 1,
+						dimension: "2d",
+					}),
 					depthClearValue: 1.0,
 					depthLoadOp: "clear",
 					depthStoreOp: "store",
@@ -915,6 +895,10 @@ export default class Renderer {
 			addressModeV: "clamp-to-edge",
 			addressModeW: "clamp-to-edge",
 		});
+		
+		const shadowmapSampler = this.device.createSampler({
+			compare: "less",
+		});
 
 		const sceneBindGroup = this.device.createBindGroup({
 			label: "ssao bind group",
@@ -956,6 +940,10 @@ export default class Renderer {
 					binding: 7,
 					resource: { buffer: lightingUniformBuffer, offset: 0, size: 2 * 4 * 4 },
 				},
+				{
+					binding: 8,
+					resource: shadowmapSampler,
+				}
 			],
 		});
 		this.globalUniformBindGroups.scene = sceneBindGroup;
@@ -1031,7 +1019,8 @@ export default class Renderer {
 				this.uniformBufferData.shadows[i * cascadeBufferSize + 33] = shadowSettings.cascades[i].bias;
 				this.uniformBufferData.shadows[i * cascadeBufferSize + 34] = shadowSettings.cascades[i].normalBias;
 				this.uniformBufferData.shadows[i * cascadeBufferSize + 35] = shadowSettings.cascades[i].pcfRadius;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 36] = shadowSettings.cascades[i].far;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 36] = shadowSettings.cascades[i].near;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 37] = shadowSettings.cascades[i].far;
 			}
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.shadows,

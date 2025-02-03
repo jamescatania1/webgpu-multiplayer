@@ -5,6 +5,7 @@ struct ShadowData {
     bias: f32,
     normal_bias: f32,
     pcf_radius: f32,
+    near: f32,
     far: f32,
 }
 @group(0) @binding(0) var<uniform> u_shadow: ShadowData;
@@ -34,6 +35,7 @@ fn vs(in: VertexIn) -> VertexOut {
 
     var out: VertexOut;
     out.pos = u_shadow.proj_matrix * (u_shadow.view_matrix * world_pos);
+    // out.pos.z += u_shadow.bias;
     return out;
 }
 

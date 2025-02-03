@@ -21,6 +21,7 @@ struct ShadowData {
     bias: f32,
     normal_bias: f32,
     pcf_radius: f32,
+    near: f32,
     far: f32,
     align_padding_1: vec4<f32>,
     align_padding_2: vec4<f32>,
@@ -38,7 +39,7 @@ struct TransformData {
 
 @group(2) @binding(0) var u_depth_sampler: sampler;
 @group(2) @binding(1) var u_depth: texture_2d<f32>;
-@group(2) @binding(2) var u_shadowmap: texture_2d_array<f32>;
+@group(2) @binding(2) var u_shadowmap: texture_depth_2d_array;
 @group(2) @binding(3) var<uniform> u_screen_size: vec2<f32>;
 
 @group(3) @binding(0) var u_ssao_noise_sampler: sampler;
@@ -56,6 +57,7 @@ struct LightingData {
     sun_color: vec4<f32>,
 };
 @group(3) @binding(7) var<uniform> u_lighting: LightingData;
+@group(3) @binding(8) var u_shadowmap_sampler: sampler_comparison;
 
 struct VertexIn { 
     @location(0) vertex_xyzc: vec2<u32>,
@@ -131,7 +133,7 @@ fn vs(in: VertexIn) -> VertexOut {
 // https://web.archive.org/web/20180524211931/https://www.dissidentlogic.com/old/images/NormalOffsetShadows/GDC_Poster_NormalOffset.png
 fn shadow_clip_pos(cascade: i32, n: vec3<f32>, cos_lo: f32, world_pos: vec4<f32>) -> vec4<f32> {
     // let offset_normal_scale: f32 = u_shadow[cascade].normal_bias / 2048.0;
-    let offset_normal_scale: f32 = saturate(1.0 - cos_lo) * u_shadow[cascade].normal_bias / 2048.0;
+    let offset_normal_scale: f32 = saturate(1.0 - cos_lo) * u_shadow[cascade].normal_bias;
     let shadow_offset = vec4<f32>(n * offset_normal_scale, 0.0);
     let shadow_clip_pos: vec4<f32> = u_shadow[cascade].proj_matrix * (u_shadow[cascade].view_matrix * world_pos);
     let shadow_uv_offset_pos: vec4<f32> = u_shadow[cascade].proj_matrix * (u_shadow[cascade].view_matrix * (world_pos + shadow_offset));
@@ -177,16 +179,19 @@ fn shadow(cascade_index: i32, shadow_clip_pos: vec4<f32>, normal: vec3<f32>) -> 
     var shadowmap_pos: vec2<f32> = shadow_clip_pos.xy / shadow_clip_pos.w;
     shadowmap_pos = shadowmap_pos * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
 
-    // let n_dot_l: f32 = dot(normal, u_lighting.sun_direction);
     let texel_size: vec2<f32> = vec2<f32>(1.0) / vec2<f32>(textureDimensions(u_shadowmap).xy);
     var res: f32 = 0.0;
-    let shadow_pcf_radius: i32 = i32(u_shadow[0].pcf_radius);
+    let shadow_pcf_radius: i32 = i32(u_shadow[cascade_index].pcf_radius);
     for (var i: i32 = -shadow_pcf_radius; i <= shadow_pcf_radius; i++) {
         for (var j: i32 = -shadow_pcf_radius; j <= shadow_pcf_radius; j++) {
-            let sample_depth = textureSample(u_shadowmap, u_depth_sampler, shadowmap_pos + vec2<f32>(f32(i), f32(j)) * texel_size, cascade_index).r / u_shadow[cascade_index].depth_scale;
-            if (sample_depth < frag_depth) {
-                res += 1.0;
-            }
+            let sample_pos = shadowmap_pos + vec2<f32>(f32(i), f32(j)) * texel_size;
+            res += 1.0 - textureSampleCompareLevel(
+                u_shadowmap, 
+                u_shadowmap_sampler,
+                sample_pos,
+                cascade_index,
+                frag_depth - u_shadow[cascade_index].bias
+            );
         }
     }
     res /= f32((2 * shadow_pcf_radius + 1) * (2 * shadow_pcf_radius + 1));
@@ -232,22 +237,25 @@ fn fs(in: VertexOut) -> FragmentOut {
     }
 
     // shadows
-    var shadow_clip_pos: vec4<f32>;
-    var cascade_index: i32;
     let view_depth = abs(in.view_pos.z);
+    var shadow_factor: f32 = 0.0;
     if (view_depth < u_shadow[0].far) {
-        shadow_clip_pos = in.shadow_clip_pos_0;
-        cascade_index = 0;
+        shadow_factor = shadow(0, in.shadow_clip_pos_0, n);
+        if (u_shadow[1].near < view_depth) {
+            let shadow_factor_alt = shadow(1, in.shadow_clip_pos_1, n);
+            shadow_factor = mix(shadow_factor, shadow_factor_alt, (view_depth - u_shadow[1].near) / (u_shadow[0].far - u_shadow[1].near));
+        }
     }
     else if (view_depth < u_shadow[1].far) {
-        shadow_clip_pos = in.shadow_clip_pos_1;
-        cascade_index = 1;
+        shadow_factor = shadow(1, in.shadow_clip_pos_1, n);
+        if (u_shadow[2].near < view_depth) {
+            let shadow_factor_alt = shadow(2, in.shadow_clip_pos_2, n);
+            shadow_factor = mix(shadow_factor, shadow_factor_alt, (view_depth - u_shadow[2].near) / (u_shadow[1].far - u_shadow[2].near));
+        }
     }
-    else {
-        shadow_clip_pos = in.shadow_clip_pos_2;
-        cascade_index = 2;
+    else if (view_depth < u_shadow[2].far) {
+        shadow_factor = shadow(2, in.shadow_clip_pos_2, n);
     }
-    let shadow_factor: f32 = shadow(cascade_index, shadow_clip_pos, n);
 
     light += directional * (1.0 - shadow_factor);
 
@@ -267,7 +275,7 @@ fn fs(in: VertexOut) -> FragmentOut {
     // SSAO
     let occlusion = ssao(in.view_pos.xyz, in.view_normal, in.vertex_pos_hash, in.pos.z);
 
-    light += max(occlusion, 1.0) * ambient * 0.5;
+    light += occlusion * ambient * 0.7;
 
     var color: vec3<f32> = light;
 
@@ -280,14 +288,11 @@ fn fs(in: VertexOut) -> FragmentOut {
     // else if (cascade_index == 2) {
     //     color = mix(color, vec3<f32>(0.0, 0.0, 1.0), 0.1);
     // }
+    
 
     var out: FragmentOut;
     out.color = vec4<f32>(color, 1.0);
-    // out.occlusion = occlusion * vec4<f32>(1.0);
     out.occlusion = vec4<f32>(color, 1.0);
-    // out.occlusion = vec4<f32>(1.0) - vec4<f32>(occlusion_fade * occlusion);
-    
-
     return out;
 }
 
