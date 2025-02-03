@@ -5,9 +5,9 @@ struct ShadowData {
     bias: f32,
     normal_bias: f32,
     pcf_radius: f32,
+    far: f32,
 }
-@group(0) @binding(1) var<uniform> u_shadow: array<ShadowData, TEMPL_shadow_cascades>;
-@group(0) @binding(2) var<uniform> u_shadow_index: i32;
+@group(0) @binding(0) var<uniform> u_shadow: ShadowData;
 
 struct TransformData {
     model_matrix: mat4x4<f32>,
@@ -33,11 +33,11 @@ fn vs(in: VertexIn) -> VertexOut {
     let world_pos: vec4f = u_transform.model_matrix * vec4f(vec3f(x, y, z) * u_transform.model_scale + u_transform.model_offset, 1.0);
 
     var out: VertexOut;
-    out.pos = u_shadow[u_shadow_index].proj_matrix * (u_shadow[u_shadow_index].view_matrix * world_pos);
+    out.pos = u_shadow.proj_matrix * (u_shadow.view_matrix * world_pos);
     return out;
 }
 
 @fragment 
 fn fs(in: VertexOut) -> @location(0) vec4f {
-    return vec4f((in.pos.z + u_shadow[u_shadow_index].bias) * u_shadow[u_shadow_index].depth_scale, 1.0, 1.0, 1.0);
+    return vec4f((in.pos.z + u_shadow.bias) * u_shadow.depth_scale, 1.0, 1.0, 1.0);
 }

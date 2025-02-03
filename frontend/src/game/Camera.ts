@@ -46,6 +46,7 @@ export default class Camera {
 		vec4.fromValues(1, 1, 0, 1.0),
 		vec4.fromValues(1, 1, 1, 1.0),
 	];
+	private readonly shadowProjMatrix = mat4.create();
 	private readonly center = vec4.create();
 	private readonly centerXYZ = vec3.create();
 	private readonly shadowEye = vec3.create();
@@ -95,15 +96,15 @@ export default class Camera {
 				canvas.width / canvas.height,
 				shadowSettings.cascades[c].near,
 				shadowSettings.cascades[c].far,
-				this.cascadeMatrices[c].proj
+				this.shadowProjMatrix,
 			);
-			mat4.mul(this.cascadeMatrices[c].proj, this.viewMatrix, this.cascadeMatrices[c].proj);
-			mat4.invert(this.cascadeMatrices[c].proj, this.cascadeMatrices[c].proj);
+			mat4.mul(this.shadowProjMatrix, this.viewMatrix, this.shadowProjMatrix);
+			mat4.invert(this.shadowProjMatrix, this.shadowProjMatrix);
 
 			vec4.zero(this.center);
 			for (let i = 0; i < 8; i++) {
 				vec4.zero(this.corners[i]);
-				mat4.multiply(this.cascadeMatrices[c].proj, this.clipCorners[i], this.corners[i]);
+				mat4.multiply(this.shadowProjMatrix, this.clipCorners[i], this.corners[i]);
 				vec4.divScalar(this.corners[i], this.corners[i][3], this.corners[i]);
 				vec4.add(this.center, this.corners[i], this.center);
 			}

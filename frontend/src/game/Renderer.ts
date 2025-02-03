@@ -27,34 +27,34 @@ export const shadowSettings = {
 			depthScale: 300.0,
 			near: 0.1,
 			far: 10.0,
-			bias: 0.001,
-			normalBias: 100.0,
+			bias: 0.0008,
+			normalBias: 450.0,
+			pcfRadius: 4,
+		},
+		{
+			depthScale: 300.0,
+			near: 10,
+			far: 30.0,
+			bias: 0.0006,
+			normalBias: 500.0,
 			pcfRadius: 3,
 		},
 		{
 			depthScale: 300.0,
-			near: 10.0,
-			far: 50.0,
-			bias: 0.001,
-			normalBias: 100.0,
-			pcfRadius: 3,
-		},
-		{
-			depthScale: 300.0,
-			near: 50.0,
+			near: 30,
 			far: 150.0,
 			bias: 0.001,
-			normalBias: 100.0,
+			normalBias: 400.0,
 			pcfRadius: 3,
 		},
-	]
+	],
 };
 export const sunSettings = {
 	position: vec3.fromValues(20, 50, 17),
 	direction: vec3.normalize(vec3.fromValues(20, 50, 17)),
 	color: vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0)),
 	intensity: 0.75,
-}
+};
 export const skySettings = {
 	skyboxSource: "sky",
 	skyboxResolution: 2048,
@@ -76,19 +76,20 @@ export default class Renderer {
 	private readonly uniformBuffers: {
 		camera: GPUBuffer;
 		shadows: GPUBuffer;
-		shadowCascadeIndex: GPUBuffer;
 	};
 	private readonly uniformBufferData: {
 		camera: Float32Array;
 		shadows: Float32Array;
-	}
+	};
 	private globalUniformBindGroupLayouts: {
 		camera: GPUBindGroupLayout;
+		shadows: GPUBindGroupLayout;
 		depth: GPUBindGroupLayout;
 		scene: GPUBindGroupLayout;
 	};
 	private globalUniformBindGroups: {
 		camera: GPUBindGroup | null;
+		shadows: GPUBindGroup[];
 		depth: GPUBindGroup | null;
 		scene: GPUBindGroup | null;
 		drawTexture: GPUBindGroup | null;
@@ -101,7 +102,7 @@ export default class Renderer {
 	};
 	private renderPassDescriptors: {
 		depthPass: GPURenderPassDescriptor | null;
-		shadowPass: GPURenderPassDescriptor | null;
+		shadowPass: GPURenderPassDescriptor[] | null;
 		sceneDraw: GPURenderPassDescriptor | null;
 		postFX: GPURenderPassDescriptor | null;
 	};
@@ -134,13 +135,13 @@ export default class Renderer {
 
 		this.camera = new Camera(canvas);
 		this.camera.position[2] = 5.0;
-		
+
 		this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 		this.ctx.configure({
 			device: this.device,
 			format: this.presentationFormat,
 		});
-		
+
 		this.sky = new Sky(this, this.device, this.camera, this.shaders);
 		this.shadowData = {
 			texture: null,
@@ -160,11 +161,16 @@ export default class Renderer {
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: {},
 				},
+			],
+		});
+		const shadowsBindGroupLayout = this.device.createBindGroupLayout({
+			label: "shadow pass bind group layout",
+			entries: [
 				{
-					binding: 2,
+					binding: 0,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: {},
-				}
+				},
 			],
 		});
 		const depthBindGroupLayout = this.device.createBindGroupLayout({
@@ -246,6 +252,7 @@ export default class Renderer {
 		});
 		this.globalUniformBindGroupLayouts = {
 			camera: cameraBindGroupLayout,
+			shadows: shadowsBindGroupLayout,
 			depth: depthBindGroupLayout,
 			scene: sceneBindGroupLayout,
 		};
@@ -306,7 +313,7 @@ export default class Renderer {
 		});
 		const shadowDepthPipelineLayout = this.device.createPipelineLayout({
 			label: "shadow pass layout",
-			bindGroupLayouts: [this.globalUniformBindGroupLayouts.camera, transformBindGroupLayout],
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.shadows, transformBindGroupLayout],
 		});
 		const shadowDepthRenderPipeline = this.device.createRenderPipeline({
 			label: "shadow depth pass pipeline",
@@ -458,6 +465,7 @@ export default class Renderer {
 			postFX: postFXPipeline,
 		};
 
+		const cascadeBufferSizeBytes = 256;
 		this.uniformBuffers = {
 			camera: this.device.createBuffer({
 				label: "camera uniform buffer",
@@ -466,19 +474,14 @@ export default class Renderer {
 			}),
 			shadows: this.device.createBuffer({
 				label: "shadow cascades uniform buffer",
-				size: shadowSettings.cascades.length * 36 * 4,
+				size: shadowSettings.cascades.length * cascadeBufferSizeBytes,
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			}),
-			shadowCascadeIndex: this.device.createBuffer({
-				label: "shadow cascade index uniform buffer",
-				size: 4,
-				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-			})
 		};
 		this.uniformBufferData = {
 			camera: new Float32Array(this.uniformBuffers.camera.size / 4),
 			shadows: new Float32Array(this.uniformBuffers.shadows.size / 4),
-		}
+		};
 
 		const cameraBindGroup = this.device.createBindGroup({
 			layout: this.globalUniformBindGroupLayouts.camera,
@@ -495,19 +498,30 @@ export default class Renderer {
 						size: this.uniformBuffers.shadows.size,
 					},
 				},
-				{
-					binding: 2,
-					resource: {
-						buffer: this.uniformBuffers.shadowCascadeIndex,
-						offset: 0,
-						size: this.uniformBuffers.shadowCascadeIndex.size,
-					}
-				}
 			],
 		});
+		const shadowBindGroups = [];
+		for (let i = 0; i < shadowSettings.cascades.length; i++) {
+			shadowBindGroups.push(
+				this.device.createBindGroup({
+					layout: this.globalUniformBindGroupLayouts.shadows,
+					entries: [
+						{
+							binding: 0,
+							resource: {
+								buffer: this.uniformBuffers.shadows,
+								offset: i * cascadeBufferSizeBytes,
+								size: cascadeBufferSizeBytes,
+							},
+						}
+					]
+				})
+			)
+		}
 
 		this.globalUniformBindGroups = {
 			camera: cameraBindGroup,
+			shadows: shadowBindGroups,
 			// depend on the lighting load state, and is created in onLightingLoad
 			scene: null,
 			// depend on the screen size, and are created in buildScreenRenderDescriptors
@@ -671,7 +685,9 @@ export default class Renderer {
 				},
 				{
 					binding: 2,
-					resource: this.shadowData.texture.createView(),
+					resource: this.shadowData.texture.createView({
+						dimension: "2d-array",
+					}),
 				},
 				{
 					binding: 3,
@@ -771,47 +787,50 @@ export default class Renderer {
 		});
 		const depthView = depthTexture.createView();
 
-		// the depth texture drawn to by the shadow pass
-		const depthDrawTexture = this.device.createTexture({
-			label: "shadow draw depth texture",
-			size: [shadowSettings.resolution, shadowSettings.resolution],
-			sampleCount: 4,
-			format: "r16float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT,
-		});
-
 		// resolve depth texture to be able to sample in rendering
 		const depthResolveTexture = this.device.createTexture({
 			label: "shadow resolve depth draw texture",
 			size: [shadowSettings.resolution, shadowSettings.resolution, shadowSettings.cascades.length],
 			sampleCount: 1,
 			format: "r16float",
+			dimension: "2d",
 			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 		this.shadowData.texture = depthResolveTexture;
 
-		this.renderPassDescriptors.shadowPass = {
-			label: "shadow pass descriptor",
-			colorAttachments: [
-				{
-					clearValue: [1.0, 1.0, 1.0, 1.0],
-					loadOp: "clear",
-					storeOp: "store",
-					view: depthDrawTexture.createView(),
-					resolveTarget: depthResolveTexture.createView({
-						baseArrayLayer: 0,
-						arrayLayerCount: 1,
-						dimension: "2d",
-					}),
+		this.renderPassDescriptors.shadowPass = [];
+		for (let i = 0; i < shadowSettings.cascades.length; i++) {
+			// the depth texture drawn to by the shadow pass
+			const depthDrawTexture = this.device.createTexture({
+				label: `shadow draw depth texture - cascade #${i}`,
+				size: [shadowSettings.resolution, shadowSettings.resolution],
+				sampleCount: 4,
+				format: "r16float",
+				usage: GPUTextureUsage.RENDER_ATTACHMENT,
+			});
+			this.renderPassDescriptors.shadowPass.push({
+				label: `shadow pass descriptor - cascade #${i}`,
+				colorAttachments: [
+					{
+						clearValue: [1.0, 1.0, 1.0, 1.0],
+						loadOp: "clear",
+						storeOp: "store",
+						view: depthDrawTexture.createView(),
+						resolveTarget: depthResolveTexture.createView({
+							baseArrayLayer: i,
+							arrayLayerCount: 1,
+							dimension: "2d",
+						}),
+					},
+				],
+				depthStencilAttachment: {
+					view: depthView,
+					depthClearValue: 1.0,
+					depthLoadOp: "clear",
+					depthStoreOp: "store",
 				},
-			],
-			depthStencilAttachment: {
-				view: depthView,
-				depthClearValue: 1.0,
-				depthLoadOp: "clear",
-				depthStoreOp: "store",
-			},
-		};
+			});
+		}
 	}
 
 	public onLightingLoad() {
@@ -981,12 +1000,6 @@ export default class Renderer {
 			);
 
 			vec3.addScaled(this.camera.position, this.vel, 0.01 * deltaTime, this.camera.position);
-
-			// this.monke.transform.position[1] = Math.sin(performance.now() / 200) * 0.1 + 1.0;
-			// this.monke.transform.rotation[0] = performance.now() / 100;
-			// this.monke.transform.rotation[1] = performance.now() / 100;
-			// this.monke.transform.rotation[2] = performance.now() / 100;
-			// this.monke.transform.update(gl);
 		}
 
 		// update camera
@@ -1010,14 +1023,15 @@ export default class Renderer {
 			);
 
 			// update shadow camera buffer
-			const cascadeSize = this.uniformBufferData.shadows.length / shadowSettings.cascades.length;
+			const cascadeBufferSize = 256 / 4;
 			for (let i = 0; i < shadowSettings.cascades.length; i++) {
-				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].view, i * cascadeSize + 0);
-				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].proj, i * cascadeSize + 16);
-				this.uniformBufferData.shadows[i * cascadeSize + 32] = shadowSettings.cascades[i].depthScale;
-				this.uniformBufferData.shadows[i * cascadeSize + 33] = shadowSettings.cascades[i].bias;
-				this.uniformBufferData.shadows[i * cascadeSize + 34] = shadowSettings.cascades[i].normalBias;
-				this.uniformBufferData.shadows[i * cascadeSize + 35] = shadowSettings.cascades[i].pcfRadius;
+				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].view, i * cascadeBufferSize + 0);
+				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].proj, i * cascadeBufferSize + 16);
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 32] = shadowSettings.cascades[i].depthScale;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 33] = shadowSettings.cascades[i].bias;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 34] = shadowSettings.cascades[i].normalBias;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 35] = shadowSettings.cascades[i].pcfRadius;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 36] = shadowSettings.cascades[i].far;
 			}
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.shadows,
@@ -1046,17 +1060,18 @@ export default class Renderer {
 
 		{
 			// shadow pass
-			const shadowPass = encoder.beginRenderPass(this.renderPassDescriptors.shadowPass!);
-			shadowPass.setPipeline(this.pipelines.shadows);
-			shadowPass.setBindGroup(0, this.globalUniformBindGroups.camera!);
-
-			for (const model of this.objects) {
-				shadowPass.setBindGroup(1, model.transformUniformBindGroup);
-				shadowPass.setVertexBuffer(0, model.modelData.vertexBuffer);
-				shadowPass.setIndexBuffer(model.modelData.indexBuffer, model.modelData.indexFormat);
-				shadowPass.drawIndexed(model.modelData.indexCount);
+			for (let i = 0; i < shadowSettings.cascades.length; i++) {
+				const shadowPass = encoder.beginRenderPass(this.renderPassDescriptors.shadowPass![i]);
+				shadowPass.setPipeline(this.pipelines.shadows);
+				shadowPass.setBindGroup(0, this.globalUniformBindGroups.shadows![i]);
+				for (const model of this.objects) {
+					shadowPass.setBindGroup(1, model.transformUniformBindGroup);
+					shadowPass.setVertexBuffer(0, model.modelData.vertexBuffer);
+					shadowPass.setIndexBuffer(model.modelData.indexBuffer, model.modelData.indexFormat);
+					shadowPass.drawIndexed(model.modelData.indexCount);
+				}
+				shadowPass.end();
 			}
-			shadowPass.end();
 		}
 
 		{

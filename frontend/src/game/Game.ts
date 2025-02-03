@@ -23,7 +23,6 @@ export default class Game {
 
 		this.init(canvas)
 			.then((ctx) => {
-				
 				let renderer: Renderer | null = null;
 				const resize = () => {
 					canvas.width = Math.min(window.innerWidth, ctx.device.limits.maxTextureDimension2D);
@@ -32,7 +31,7 @@ export default class Game {
 				};
 				resize();
 				window.addEventListener("resize", resize);
-				
+
 				renderer = new Renderer(canvas, ctx);
 
 				// main draw loop
@@ -88,8 +87,13 @@ export default class Game {
 
 	public async init(canvas: HTMLCanvasElement): Promise<RenderContext> {
 		const adapter = await navigator.gpu?.requestAdapter();
-		const device = await adapter?.requestDevice();
-		if (!device || !adapter) {
+		if (!adapter || !adapter.features.has("float32-filterable")) {
+			throw new Error("WebGPU adapter does not support float32 textures.");
+		}
+		const device = await adapter.requestDevice({
+			requiredFeatures: ["float32-filterable"],
+		});
+		if (!device) {
 			throw new Error("WebGPU not supported on this browser");
 		}
 

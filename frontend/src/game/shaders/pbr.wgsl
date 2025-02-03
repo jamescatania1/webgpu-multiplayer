@@ -20,9 +20,13 @@ struct ShadowData {
     depth_scale: f32,
     bias: f32,
     normal_bias: f32,
-    pcf_radius: i32,
+    pcf_radius: f32,
+    far: f32,
+    align_padding_1: vec4<f32>,
+    align_padding_2: vec4<f32>,
+    align_padding_3: mat4x4<f32>,
 }
-@group(0) @binding(1) var<uniform> u_shadow: array<ShadowData, TEMPL_shadow_cascades>;
+@group(0) @binding(1) var<uniform> u_shadow: array<ShadowData, 3>;
 
 struct TransformData {
     model_matrix: mat4x4<f32>,
@@ -69,7 +73,9 @@ struct VertexOut {
     @location(5) color: vec3<f32>,
     @location(6) view_pos: vec4<f32>,
     @location(7) vertex_pos_hash: vec2<f32>,
-    @location(8) shadow_clip_pos: vec4<f32>,
+    @location(8) shadow_clip_pos_0: vec4<f32>,
+    @location(9) shadow_clip_pos_1: vec4<f32>,
+    @location(10) shadow_clip_pos_2: vec4<f32>,
 };
 
 struct FragmentOut {
@@ -98,15 +104,12 @@ fn vs(in: VertexIn) -> VertexOut {
     let u: f32 = f32(in.vertex_uv >> 16u) / 65535.0;
     let v: f32 = f32(in.vertex_uv & 0xFFFFu) / 65535.0;
 
-    // bias the shadowmap sample based on the world normals
     let n: vec3<f32> = normalize(normal);
     let cos_lo = dot(normalize(u_lighting.sun_direction), n);
-    let offset_normal_scale = u_shadow[0].normal_bias / 2048.0;
-    let shadow_offset = vec4<f32>(n * offset_normal_scale, 0.0);
-    var shadow_clip_pos: vec4<f32> = u_shadow[0].proj_matrix * (u_shadow[0].view_matrix * world_pos);
-    var shadow_uv_offset_pos: vec4<f32> = u_shadow[0].proj_matrix * (u_shadow[0].view_matrix * (world_pos + shadow_offset));
-    shadow_clip_pos = vec4<f32>(shadow_uv_offset_pos.xy, shadow_clip_pos.zw);
-    
+    let shadow_clip_pos_0: vec4<f32> = shadow_clip_pos(0, n, cos_lo, world_pos);
+    let shadow_clip_pos_1: vec4<f32> = shadow_clip_pos(1, n, cos_lo, world_pos);
+    let shadow_clip_pos_2: vec4<f32> = shadow_clip_pos(2, n, cos_lo, world_pos);
+
     var out: VertexOut;
     out.pos = clip_pos;
     out.view_pos = view_pos;
@@ -118,9 +121,21 @@ fn vs(in: VertexIn) -> VertexOut {
     out.screen_uv.y = 1.0 - out.screen_uv.y;
     out.color = vec3<f32>(r, g, b);
     out.vertex_pos_hash = vec2<f32>(x + y, z + x);
-    out.shadow_clip_pos = shadow_clip_pos;
-    // out.shadow_clip_pos = u_shadow.proj_matrix * (u_shadow.view_matrix * world_pos);
+    out.shadow_clip_pos_0 = shadow_clip_pos_0;
+    out.shadow_clip_pos_1 = shadow_clip_pos_1;
+    out.shadow_clip_pos_2 = shadow_clip_pos_2;
     return out;
+}
+
+// bias the shadowmap sample based on the world normals
+// https://web.archive.org/web/20180524211931/https://www.dissidentlogic.com/old/images/NormalOffsetShadows/GDC_Poster_NormalOffset.png
+fn shadow_clip_pos(cascade: i32, n: vec3<f32>, cos_lo: f32, world_pos: vec4<f32>) -> vec4<f32> {
+    // let offset_normal_scale: f32 = u_shadow[cascade].normal_bias / 2048.0;
+    let offset_normal_scale: f32 = saturate(1.0 - cos_lo) * u_shadow[cascade].normal_bias / 2048.0;
+    let shadow_offset = vec4<f32>(n * offset_normal_scale, 0.0);
+    let shadow_clip_pos: vec4<f32> = u_shadow[cascade].proj_matrix * (u_shadow[cascade].view_matrix * world_pos);
+    let shadow_uv_offset_pos: vec4<f32> = u_shadow[cascade].proj_matrix * (u_shadow[cascade].view_matrix * (world_pos + shadow_offset));
+    return vec4<f32>(shadow_uv_offset_pos.xy, shadow_clip_pos.zw);
 }
 
 fn ssao(view_pos: vec3<f32>, view_normal: vec3<f32>, sample_location: vec2<f32>, clip_z: f32) -> f32 {
@@ -157,7 +172,7 @@ fn ssao(view_pos: vec3<f32>, view_normal: vec3<f32>, sample_location: vec2<f32>,
     return occlusion;
 }
 
-fn shadow(shadow_clip_pos: vec4<f32>, normal: vec3<f32>) -> f32 {
+fn shadow(cascade_index: i32, shadow_clip_pos: vec4<f32>, normal: vec3<f32>) -> f32 {
     let frag_depth = shadow_clip_pos.z / shadow_clip_pos.w;
     var shadowmap_pos: vec2<f32> = shadow_clip_pos.xy / shadow_clip_pos.w;
     shadowmap_pos = shadowmap_pos * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
@@ -165,10 +180,10 @@ fn shadow(shadow_clip_pos: vec4<f32>, normal: vec3<f32>) -> f32 {
     // let n_dot_l: f32 = dot(normal, u_lighting.sun_direction);
     let texel_size: vec2<f32> = vec2<f32>(1.0) / vec2<f32>(textureDimensions(u_shadowmap).xy);
     var res: f32 = 0.0;
-    let shadow_pcf_radius: i32 = u_shadow[0].pcf_radius;
+    let shadow_pcf_radius: i32 = i32(u_shadow[0].pcf_radius);
     for (var i: i32 = -shadow_pcf_radius; i <= shadow_pcf_radius; i++) {
         for (var j: i32 = -shadow_pcf_radius; j <= shadow_pcf_radius; j++) {
-            let sample_depth = textureSample(u_shadowmap, u_depth_sampler, shadowmap_pos + vec2<f32>(f32(i), f32(j)) * texel_size, 0).r / u_shadow[0].depth_scale;
+            let sample_depth = textureSample(u_shadowmap, u_depth_sampler, shadowmap_pos + vec2<f32>(f32(i), f32(j)) * texel_size, cascade_index).r / u_shadow[cascade_index].depth_scale;
             if (sample_depth < frag_depth) {
                 res += 1.0;
             }
@@ -217,7 +232,22 @@ fn fs(in: VertexOut) -> FragmentOut {
     }
 
     // shadows
-    let shadow_factor = shadow(in.shadow_clip_pos, n);
+    var shadow_clip_pos: vec4<f32>;
+    var cascade_index: i32;
+    let view_depth = abs(in.view_pos.z);
+    if (view_depth < u_shadow[0].far) {
+        shadow_clip_pos = in.shadow_clip_pos_0;
+        cascade_index = 0;
+    }
+    else if (view_depth < u_shadow[1].far) {
+        shadow_clip_pos = in.shadow_clip_pos_1;
+        cascade_index = 1;
+    }
+    else {
+        shadow_clip_pos = in.shadow_clip_pos_2;
+        cascade_index = 2;
+    }
+    let shadow_factor: f32 = shadow(cascade_index, shadow_clip_pos, n);
 
     light += directional * (1.0 - shadow_factor);
 
@@ -237,9 +267,19 @@ fn fs(in: VertexOut) -> FragmentOut {
     // SSAO
     let occlusion = ssao(in.view_pos.xyz, in.view_normal, in.vertex_pos_hash, in.pos.z);
 
-    light += occlusion * ambient * 0.5;
+    light += max(occlusion, 1.0) * ambient * 0.5;
 
     var color: vec3<f32> = light;
+
+    // if (cascade_index == 0) {
+    //     color = mix(color, vec3<f32>(1.0, 0.0, 0.0), 0.1);
+    // }
+    // else if (cascade_index == 1) {
+    //     color = mix(color, vec3<f32>(0.0, 1.0, 0.0), 0.1);
+    // }
+    // else if (cascade_index == 2) {
+    //     color = mix(color, vec3<f32>(0.0, 0.0, 1.0), 0.1);
+    // }
 
     var out: FragmentOut;
     out.color = vec4<f32>(color, 1.0);
