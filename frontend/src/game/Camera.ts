@@ -1,5 +1,5 @@
 import { mat4, vec3, vec4, type Mat4, type Vec4 } from "wgpu-matrix";
-import { shadowSettings, sunSettings } from "./Renderer";
+import { SHADOW_SETTINGS, SUN_SETTINGS } from "./Renderer";
 
 type CascadeTransform = {
 	view: Mat4,
@@ -55,7 +55,7 @@ export default class Camera {
 
 	constructor(canvas: HTMLCanvasElement) {
 		this.position[1] = 2.0;
-		this.cascadeMatrices = shadowSettings.cascades.map((_) => {
+		this.cascadeMatrices = SHADOW_SETTINGS.cascades.map((_) => {
 			return {
 				view: mat4.create(),
 				proj: mat4.create(),
@@ -90,12 +90,12 @@ export default class Camera {
 		mat4.mul(this.projMatrix, this.rotProjMatrix, this.rotProjMatrix);
 
 		// update the shadow camera matrices
-		for (let c = 0; c < shadowSettings.cascades.length; c++) {
+		for (let c = 0; c < SHADOW_SETTINGS.cascades.length; c++) {
 			mat4.perspective(
 				(this.fov * Math.PI) / 180,
 				canvas.width / canvas.height,
-				shadowSettings.cascades[c].near,
-				shadowSettings.cascades[c].far,
+				SHADOW_SETTINGS.cascades[c].near,
+				SHADOW_SETTINGS.cascades[c].far,
 				this.shadowProjMatrix,
 			);
 			mat4.mul(this.shadowProjMatrix, this.viewMatrix, this.shadowProjMatrix);
@@ -110,7 +110,7 @@ export default class Camera {
 			}
 			vec4.divScalar(this.center, 8, this.center);
 			vec3.set(this.center[0], this.center[1], this.center[2], this.centerXYZ);
-			vec3.add(this.centerXYZ, sunSettings.direction, this.shadowEye);
+			vec3.add(this.centerXYZ, SUN_SETTINGS.direction, this.shadowEye);
 			mat4.lookAt(this.shadowEye, this.centerXYZ, this.up, this.cascadeMatrices[c].view);
 	
 			vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);

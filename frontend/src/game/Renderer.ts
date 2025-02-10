@@ -10,8 +10,10 @@ import Sky from "./Sky";
 const MAX_VEL = 1.0;
 const ACCEL = 0.01;
 const MOUSE_SENSITIVITY = 2.0;
-export const ssaoSettings = {
-	sampleCount: 64,
+
+export const DEBUG_GRAPHICS_TIME = true;
+export const SSAO_SETTINGS = {
+	sampleCount: 32,
 	radius: 0.4,
 	bias: 0.05,
 	kernelDotCutOff: 0.025,
@@ -20,8 +22,8 @@ export const ssaoSettings = {
 	fadeStart: 45.0,
 	fadeEnd: 105.0,
 };
-export const shadowSettings = {
-	resolution: 2048,
+export const SHADOW_SETTINGS = {
+	resolution: 4096,
 	cascades: [
 		{
 			depthScale: 300.0,
@@ -29,7 +31,7 @@ export const shadowSettings = {
 			far: 10.0,
 			bias: 0.0001,
 			normalBias: 0.1,
-			pcfRadius: 3,
+			pcfRadius: 4,
 		},
 		{
 			depthScale: 300.0,
@@ -49,13 +51,13 @@ export const shadowSettings = {
 		},
 	],
 };
-export const sunSettings = {
+export const SUN_SETTINGS = {
 	position: vec3.fromValues(20, 50, 17),
 	direction: vec3.normalize(vec3.fromValues(20, 50, 17)),
 	color: vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0)),
 	intensity: 0.75,
 };
-export const skySettings = {
+export const SKY_SETTINGS = {
 	skyboxSource: "sky",
 	skyboxResolution: 2048,
 	irradianceResolution: 64,
@@ -73,6 +75,13 @@ export default class Renderer {
 	private readonly adapter: GPUAdapter;
 	private readonly ctx: GPUCanvasContext;
 
+	public timestampData: {
+		querySet: GPUQuerySet;
+		resolveBuffer: GPUBuffer;
+		resultBuffer: GPUBuffer;
+		debugRenderPasses: GPURenderPassDescriptor[];
+		data: { [key: string]: number };
+	} | null = null;
 	private readonly uniformBuffers: {
 		camera: GPUBuffer;
 		shadows: GPUBuffer;
@@ -101,10 +110,10 @@ export default class Renderer {
 		postFX: GPURenderPipeline;
 	};
 	private renderPassDescriptors: {
-		depthPass: GPURenderPassDescriptor | null;
-		shadowPass: GPURenderPassDescriptor[] | null;
-		sceneDraw: GPURenderPassDescriptor | null;
-		postFX: GPURenderPassDescriptor | null;
+		depthPass: GPURenderPassDescriptor;
+		shadowPass: GPURenderPassDescriptor[];
+		sceneDraw: GPURenderPassDescriptor;
+		postFX: GPURenderPassDescriptor;
 	};
 	private shadowData: {
 		texture: GPUTexture | null;
@@ -254,8 +263,8 @@ export default class Renderer {
 					visibility: GPUShaderStage.FRAGMENT,
 					sampler: {
 						type: "comparison",
-					}
-				}
+					},
+				},
 			],
 		});
 		this.globalUniformBindGroupLayouts = {
@@ -409,12 +418,12 @@ export default class Renderer {
 				entryPoint: "fs",
 				targets: [{ format: "rgba16float" }, { format: "r16float" }],
 				constants: {
-					ssao_samples: ssaoSettings.sampleCount,
-					ssao_radius: ssaoSettings.radius,
-					ssao_bias: ssaoSettings.bias,
-					ssao_noise_scale: ssaoSettings.noiseScale,
-					ssao_fade_start: ssaoSettings.fadeStart,
-					ssao_fade_end: ssaoSettings.fadeEnd,
+					ssao_samples: SSAO_SETTINGS.sampleCount,
+					ssao_radius: SSAO_SETTINGS.radius,
+					ssao_bias: SSAO_SETTINGS.bias,
+					ssao_noise_scale: SSAO_SETTINGS.noiseScale,
+					ssao_fade_start: SSAO_SETTINGS.fadeStart,
+					ssao_fade_end: SSAO_SETTINGS.fadeEnd,
 					near: this.camera.near,
 					far: this.camera.far,
 				},
@@ -481,7 +490,7 @@ export default class Renderer {
 			}),
 			shadows: this.device.createBuffer({
 				label: "shadow cascades uniform buffer",
-				size: shadowSettings.cascades.length * cascadeBufferSizeBytes,
+				size: SHADOW_SETTINGS.cascades.length * cascadeBufferSizeBytes,
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			}),
 		};
@@ -508,7 +517,7 @@ export default class Renderer {
 			],
 		});
 		const shadowBindGroups = [];
-		for (let i = 0; i < shadowSettings.cascades.length; i++) {
+		for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
 			shadowBindGroups.push(
 				this.device.createBindGroup({
 					layout: this.globalUniformBindGroupLayouts.shadows,
@@ -520,10 +529,10 @@ export default class Renderer {
 								offset: i * cascadeBufferSizeBytes,
 								size: cascadeBufferSizeBytes,
 							},
-						}
-					]
-				})
-			)
+						},
+					],
+				}),
+			);
 		}
 
 		this.globalUniformBindGroups = {
@@ -560,20 +569,88 @@ export default class Renderer {
 		}
 
 		this.renderPassDescriptors = {
-			depthPass: null,
-			sceneDraw: null,
-			postFX: null,
-			shadowPass: null,
+			depthPass: {
+				label: "Depth Pass",
+				colorAttachments: [],
+				depthStencilAttachment: undefined,
+			},
+			sceneDraw: {
+				label: "Scene Pass",
+				colorAttachments: [],
+				depthStencilAttachment: undefined,
+			},
+			postFX: {
+				label: "Post FX Pass",
+				colorAttachments: [],
+			},
+			shadowPass: [],
 		};
+		for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
+			this.renderPassDescriptors.shadowPass.push({
+				label: `Shadow Pass ${i + 1}`,
+				colorAttachments: [],
+				depthStencilAttachment: undefined,
+			});
+		}
 		// create the shadow mapping textures and pass descriptor
 		this.buildShadowRenderDescriptor();
 		// create the output textures and render pass descriptor
 		this.buildScreenRenderDescriptors();
 
+		if (context.timestampQuery) {
+			this.buildDebugBuffers();
+		} else {
+			this.timestampData = null;
+		}
+
 		loadBOBJ(this.device, "/city.bobj").then((data) => {
 			const model = new Model(this.device, this.camera, transformBindGroupLayout, data);
 			this.objects.push(model);
 		});
+	}
+
+	private buildDebugBuffers() {
+		const renderPasses = [];
+		for (const descriptor of Object.values(this.renderPassDescriptors)) {
+			if (!descriptor) {
+				continue;
+			}
+			if (Symbol.iterator in descriptor) {
+				for (const desc of descriptor) {
+					renderPasses.push(desc);
+				}
+			} else {
+				renderPasses.push(descriptor);
+			}
+		}
+
+		const querySet = this.device.createQuerySet({
+			type: "timestamp",
+			count: 2 * renderPasses.length,
+		});
+		const resolveBuffer = this.device.createBuffer({
+			size: querySet.count * 8,
+			usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+		});
+		const resultBuffer = this.device.createBuffer({
+			size: resolveBuffer.size,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+		});
+		this.timestampData = {
+			querySet: querySet,
+			resolveBuffer: resolveBuffer,
+			resultBuffer: resultBuffer,
+			debugRenderPasses: renderPasses,
+			data: { ...Object.fromEntries(renderPasses.map((desc, i) => [desc.label, 0])) },
+		};
+
+		for (let i = 0; i < renderPasses.length; i++) {
+			renderPasses[i].timestampWrites = {
+				querySet: querySet,
+				beginningOfPassWriteIndex: i * 2,
+				endOfPassWriteIndex: i * 2 + 1,
+			};
+		}
 	}
 
 	/**
@@ -723,61 +800,54 @@ export default class Renderer {
 			],
 		});
 
-		// render pass descriptors
-		this.renderPassDescriptors.depthPass = {
-			label: "depth pass descriptor",
-			colorAttachments: [
-				{
-					clearValue: [0.0, 0.0, 0.0, 0.0],
-					loadOp: "clear",
-					storeOp: "store",
-					view: depthDrawView,
-					resolveTarget: depthResolveView,
-				},
-			],
-			depthStencilAttachment: {
-				view: depthView,
-				depthClearValue: 1.0,
-				depthLoadOp: "clear",
-				depthStoreOp: "store",
+		// update render pass descriptor textures
+		(this.renderPassDescriptors.depthPass as any).colorAttachments = [
+			{
+				clearValue: [0.0, 0.0, 0.0, 0.0],
+				loadOp: "clear",
+				storeOp: "store",
+				view: depthDrawView,
+				resolveTarget: depthResolveView,
 			},
+		];
+		(this.renderPassDescriptors.depthPass as any).depthStencilAttachment = {
+			view: depthView,
+			depthClearValue: 1.0,
+			depthLoadOp: "clear",
+			depthStoreOp: "store",
 		};
-		this.renderPassDescriptors.sceneDraw = {
-			label: "output screen draw descriptor",
-			colorAttachments: [
-				{
-					clearValue: [0.0, 0.0, 0.0, 1.0],
-					loadOp: "clear",
-					storeOp: "store",
-					view: sceneDrawView,
-					resolveTarget: sceneResolveView,
-				},
-				{
-					clearValue: [0.0, 0.0, 0.0, 1.0],
-					loadOp: "clear",
-					storeOp: "store",
-					view: ssaoOutView,
-					resolveTarget: ssaoResolveView,
-				},
-			],
-			depthStencilAttachment: {
-				view: depthView,
-				depthLoadOp: "load",
-				depthStoreOp: "discard",
+
+		(this.renderPassDescriptors.sceneDraw as any).colorAttachments = [
+			{
+				clearValue: [0.0, 0.0, 0.0, 1.0],
+				loadOp: "clear",
+				storeOp: "store",
+				view: sceneDrawView,
+				resolveTarget: sceneResolveView,
 			},
+			{
+				clearValue: [0.0, 0.0, 0.0, 1.0],
+				loadOp: "clear",
+				storeOp: "store",
+				view: ssaoOutView,
+				resolveTarget: ssaoResolveView,
+			},
+		];
+		(this.renderPassDescriptors.sceneDraw as any).depthStencilAttachment = {
+			view: depthView,
+			depthLoadOp: "load",
+			depthStoreOp: "discard",
 		};
-		this.renderPassDescriptors.postFX = {
-			label: "post processing draw descriptor",
-			colorAttachments: [
-				{
-					clearValue: [0.0, 0.0, 0.0, 1.0],
-					loadOp: "clear",
-					storeOp: "store",
-					view: screenOutputView,
-					resolveTarget: this.ctx.getCurrentTexture().createView(),
-				},
-			],
-		};
+
+		(this.renderPassDescriptors.postFX as any).colorAttachments = [
+			{
+				clearValue: [0.0, 0.0, 0.0, 1.0],
+				loadOp: "clear",
+				storeOp: "store",
+				view: screenOutputView,
+				resolveTarget: this.ctx.getCurrentTexture().createView(),
+			},
+		];
 	}
 
 	/**
@@ -787,29 +857,24 @@ export default class Renderer {
 		// shadow depth texture used while rendering
 		const depthTexture = this.device.createTexture({
 			label: "shadow depth texture",
-			size: [shadowSettings.resolution, shadowSettings.resolution, shadowSettings.cascades.length],
+			size: [SHADOW_SETTINGS.resolution, SHADOW_SETTINGS.resolution, SHADOW_SETTINGS.cascades.length],
 			format: "depth32float",
 			dimension: "2d",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
 		this.shadowData.texture = depthTexture;
 
-		this.renderPassDescriptors.shadowPass = [];
-		for (let i = 0; i < shadowSettings.cascades.length; i++) {
-			this.renderPassDescriptors.shadowPass.push({
-				label: `shadow pass descriptor - cascade #${i}`,
-				colorAttachments: [],
-				depthStencilAttachment: {
-					view: depthTexture.createView({
-						baseArrayLayer: i,
-						arrayLayerCount: 1,
-						dimension: "2d",
-					}),
-					depthClearValue: 1.0,
-					depthLoadOp: "clear",
-					depthStoreOp: "store",
-				},
-			});
+		for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
+			(this.renderPassDescriptors.shadowPass[i] as any).depthStencilAttachment = {
+				view: depthTexture.createView({
+					baseArrayLayer: i,
+					arrayLayerCount: 1,
+					dimension: "2d",
+				}),
+				depthClearValue: 1.0,
+				depthLoadOp: "clear",
+				depthStoreOp: "store",
+			};
 		}
 	}
 
@@ -822,20 +887,20 @@ export default class Renderer {
 		// ssao uniform buffer
 		const ssaoUniformBuffer = this.device.createBuffer({
 			label: "ssao uniform buffer",
-			size: ssaoSettings.sampleCount * 4 * 4,
+			size: SSAO_SETTINGS.sampleCount * 4 * 4,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			mappedAtCreation: true,
 		});
-		const ssaoBufferData = new Float32Array(ssaoSettings.sampleCount * 4).fill(0);
+		const ssaoBufferData = new Float32Array(SSAO_SETTINGS.sampleCount * 4).fill(0);
 		let i = 0;
-		while (i < ssaoSettings.sampleCount) {
+		while (i < SSAO_SETTINGS.sampleCount) {
 			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random());
 			vec3.normalize(sample, sample);
-			let scale = i / ssaoSettings.sampleCount;
+			let scale = i / SSAO_SETTINGS.sampleCount;
 			scale = 0.1 + scale * scale * (1.0 - 0.1);
 			vec3.scale(sample, scale, sample);
 
-			if (vec3.normalize(sample)[2] < ssaoSettings.kernelDotCutOff) {
+			if (vec3.normalize(sample)[2] < SSAO_SETTINGS.kernelDotCutOff) {
 				continue;
 			}
 
@@ -846,13 +911,13 @@ export default class Renderer {
 		ssaoUniformBuffer.unmap();
 		const ssaoNoiseTexture = this.device.createTexture({
 			label: "ssao noise texture",
-			size: [ssaoSettings.noiseTextureSize, ssaoSettings.noiseTextureSize],
+			size: [SSAO_SETTINGS.noiseTextureSize, SSAO_SETTINGS.noiseTextureSize],
 			format: "rgba8unorm",
 			usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
 			sampleCount: 1,
 			textureBindingViewDimension: "2d",
 		});
-		const ssaoNoiseData = new Uint8Array(4 * ssaoSettings.noiseTextureSize * ssaoSettings.noiseTextureSize);
+		const ssaoNoiseData = new Uint8Array(4 * SSAO_SETTINGS.noiseTextureSize * SSAO_SETTINGS.noiseTextureSize);
 		for (let i = 0; i < ssaoNoiseData.length; i++) {
 			ssaoNoiseData[i] = Math.random() * 255;
 		}
@@ -863,8 +928,8 @@ export default class Renderer {
 				origin: { x: 0, y: 0, z: 0 },
 			},
 			ssaoNoiseData,
-			{ bytesPerRow: 4 * ssaoSettings.noiseTextureSize, rowsPerImage: ssaoSettings.noiseTextureSize },
-			{ width: ssaoSettings.noiseTextureSize, height: ssaoSettings.noiseTextureSize },
+			{ bytesPerRow: 4 * SSAO_SETTINGS.noiseTextureSize, rowsPerImage: SSAO_SETTINGS.noiseTextureSize },
+			{ width: SSAO_SETTINGS.noiseTextureSize, height: SSAO_SETTINGS.noiseTextureSize },
 		);
 
 		// lighting uniform buffer
@@ -875,9 +940,9 @@ export default class Renderer {
 			mappedAtCreation: true,
 		});
 		const lightingBufferData = new Float32Array(2 * 4);
-		lightingBufferData.set(sunSettings.direction, 0);
-		lightingBufferData.set(sunSettings.color, 4);
-		lightingBufferData[7] = sunSettings.intensity;
+		lightingBufferData.set(SUN_SETTINGS.direction, 0);
+		lightingBufferData.set(SUN_SETTINGS.color, 4);
+		lightingBufferData[7] = SUN_SETTINGS.intensity;
 		new Float32Array(lightingUniformBuffer.getMappedRange()).set(lightingBufferData);
 		lightingUniformBuffer.unmap();
 
@@ -895,7 +960,7 @@ export default class Renderer {
 			addressModeV: "clamp-to-edge",
 			addressModeW: "clamp-to-edge",
 		});
-		
+
 		const shadowmapSampler = this.device.createSampler({
 			compare: "less",
 		});
@@ -934,7 +999,7 @@ export default class Renderer {
 				},
 				{
 					binding: 6,
-					resource: { buffer: ssaoUniformBuffer, offset: 0, size: ssaoSettings.sampleCount * 4 * 4 },
+					resource: { buffer: ssaoUniformBuffer, offset: 0, size: SSAO_SETTINGS.sampleCount * 4 * 4 },
 				},
 				{
 					binding: 7,
@@ -943,7 +1008,7 @@ export default class Renderer {
 				{
 					binding: 8,
 					resource: shadowmapSampler,
-				}
+				},
 			],
 		});
 		this.globalUniformBindGroups.scene = sceneBindGroup;
@@ -1012,15 +1077,15 @@ export default class Renderer {
 
 			// update shadow camera buffer
 			const cascadeBufferSize = 256 / 4;
-			for (let i = 0; i < shadowSettings.cascades.length; i++) {
+			for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
 				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].view, i * cascadeBufferSize + 0);
 				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].proj, i * cascadeBufferSize + 16);
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 32] = shadowSettings.cascades[i].depthScale;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 33] = shadowSettings.cascades[i].bias;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 34] = shadowSettings.cascades[i].normalBias;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 35] = shadowSettings.cascades[i].pcfRadius;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 36] = shadowSettings.cascades[i].near;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 37] = shadowSettings.cascades[i].far;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 32] = SHADOW_SETTINGS.cascades[i].depthScale;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 33] = SHADOW_SETTINGS.cascades[i].bias;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 34] = SHADOW_SETTINGS.cascades[i].normalBias;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 35] = SHADOW_SETTINGS.cascades[i].pcfRadius;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 36] = SHADOW_SETTINGS.cascades[i].near;
+				this.uniformBufferData.shadows[i * cascadeBufferSize + 37] = SHADOW_SETTINGS.cascades[i].far;
 			}
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.shadows,
@@ -1042,14 +1107,14 @@ export default class Renderer {
 			}
 		}
 
-		(this.renderPassDescriptors.postFX!.colorAttachments as any)[0].resolveTarget = this.ctx
+		(this.renderPassDescriptors.postFX.colorAttachments as any)[0].resolveTarget = this.ctx
 			.getCurrentTexture()
 			.createView();
 		const encoder = this.device.createCommandEncoder({ label: "render encoder" });
 
 		{
 			// shadow pass
-			for (let i = 0; i < shadowSettings.cascades.length; i++) {
+			for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
 				const shadowPass = encoder.beginRenderPass(this.renderPassDescriptors.shadowPass![i]);
 				shadowPass.setPipeline(this.pipelines.shadows);
 				shadowPass.setBindGroup(0, this.globalUniformBindGroups.shadows![i]);
@@ -1115,113 +1180,41 @@ export default class Renderer {
 			postFXPass.end();
 		}
 
+		if (this.timestampData) {
+			encoder.resolveQuerySet(
+				this.timestampData.querySet,
+				0,
+				this.timestampData.querySet.count,
+				this.timestampData.resolveBuffer,
+				0,
+			);
+			if (this.timestampData.resultBuffer.mapState === "unmapped") {
+				encoder.copyBufferToBuffer(
+					this.timestampData.resolveBuffer,
+					0,
+					this.timestampData.resultBuffer,
+					0,
+					this.timestampData.resultBuffer.size,
+				);
+			}
+		}
+
 		this.device.queue.submit([encoder.finish()]);
+
+		if (this.timestampData && this.timestampData.resultBuffer.mapState === "unmapped") {
+			this.timestampData.resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
+				const timestamps = new BigInt64Array(this.timestampData!.resultBuffer.getMappedRange());
+				for (let i = 0; i < this.timestampData!.debugRenderPasses.length; i++) {
+					const pass = this.timestampData!.debugRenderPasses[i].label || `Pass ${i}`;
+					const time = Number(timestamps[i * 2 + 1] - timestamps[i * 2]) / 1000;
+					this.timestampData!.data[pass] = time;
+				}
+				this.timestampData!.resultBuffer.unmap();
+			});
+		}
 	}
 
 	public onResize() {
 		this.buildScreenRenderDescriptors();
-	}
-}
-
-class Cube {
-	public readonly modelData: {
-		vertexBuffer: GPUBuffer;
-		indexBuffer: GPUBuffer;
-		indexFormat: GPUIndexFormat;
-		indexCount: number;
-		uniformBuffer: GPUBuffer;
-		uniformBindGroup: GPUBindGroup;
-		transform: Transform;
-	};
-
-	constructor(device: GPUDevice, camera: Camera, basicModelBindGroupLayout: GPUBindGroupLayout) {
-		// vertex buffer for cube
-		// prettier-ignore
-		const vertexData = new Float32Array([
-			// x, y, z,    r, g, b
-			-0.5, -0.5,  0.5,   1.0, 0.0, 0.0,  // front bottom left
-			 0.5, -0.5,  0.5,   0.0, 1.0, 0.0,  // front bottom right
-			 0.5,  0.5,  0.5,   0.0, 0.0, 1.0,  // front top right
-			-0.5,  0.5,  0.5,   1.0, 1.0, 0.0,  // front top left
-			-0.5, -0.5, -0.5,   0.0, 1.0, 1.0,  // back bottom left
-			 0.5, -0.5, -0.5,   1.0, 0.0, 1.0,  // back bottom right
-			 0.5,  0.5, -0.5,   1.0, 1.0, 1.0,  // back top right
-			-0.5,  0.5, -0.5,   1.0, 0.0, 0.0,  // back top left
-		]);
-
-		const vertexBuffer = device.createBuffer({
-			label: "cube vertex buffer",
-			size: vertexData.byteLength,
-			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-			mappedAtCreation: true,
-		});
-		new Float32Array(vertexBuffer.getMappedRange()).set(vertexData);
-		vertexBuffer.unmap();
-
-		// index buffer for cube
-		// prettier-ignore
-		const indexData = new Uint16Array([
-			// front
-			0, 1, 2,  0, 2, 3,
-			// right
-			1, 5, 6,  1, 6, 2,
-			// back
-			5, 4, 7,  5, 7, 6,
-			// left
-			4, 0, 3,  4, 3, 7,
-			// top
-			3, 2, 6,  3, 6, 7,
-			// bottom
-			4, 5, 1,  4, 1, 0,
-		]);
-		const indexBuffer = device.createBuffer({
-			label: "cube index buffer",
-			size: indexData.byteLength,
-			usage: GPUBufferUsage.INDEX,
-			mappedAtCreation: true,
-		});
-		new Uint16Array(indexBuffer.getMappedRange()).set(indexData);
-		indexBuffer.unmap();
-
-		// create uniform buffer for cube
-		const uniformBuffer = device.createBuffer({
-			size: 16 * 4,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-		});
-		const uniformBindGroup = device.createBindGroup({
-			layout: basicModelBindGroupLayout,
-			entries: [
-				{
-					binding: 0,
-					resource: {
-						buffer: uniformBuffer,
-					},
-				},
-			],
-		});
-
-		this.modelData = {
-			vertexBuffer: vertexBuffer,
-			indexBuffer: indexBuffer,
-			indexFormat: "uint16",
-			indexCount: indexData.length,
-			uniformBuffer: uniformBuffer,
-			uniformBindGroup: uniformBindGroup,
-			transform: new Transform(camera),
-		};
-	}
-
-	public update(device: GPUDevice, camera: Camera, yPos: number) {
-		const timestamp = performance.now() / 1000 + yPos * 0.1;
-		this.modelData.transform.rotation.set([Math.sin(timestamp), Math.cos(timestamp), 0]);
-		this.modelData.transform.position[1] = yPos;
-		this.modelData.transform.update(camera);
-		device.queue.writeBuffer(
-			this.modelData.uniformBuffer,
-			0,
-			this.modelData.transform.matrix.buffer,
-			this.modelData.transform.matrix.byteOffset,
-			this.modelData.transform.matrix.byteLength,
-		);
 	}
 }

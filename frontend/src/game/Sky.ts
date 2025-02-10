@@ -3,7 +3,7 @@ import Camera from "./Camera";
 import HDRjs from "./utils/hdr";
 import loadHDR from "./utils/hdr";
 import type { Shaders } from "./Shaders";
-import Renderer, { skySettings } from "./Renderer";
+import Renderer, { SKY_SETTINGS } from "./Renderer";
 
 // export type PointLight = {
 // 	position: vec3;
@@ -29,11 +29,6 @@ type SceneData = {
 export default class Sky {
 	private readonly debug = true;
 
-	public readonly sunPosition = vec3.fromValues(20, 50, 17);
-	public readonly sunDirection = vec3.normalize(this.sunPosition);
-	public readonly sunColor = vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0));
-	public readonly sunIntensity = 0.75;
-
 	public skyboxRenderData: SkyboxRenderData | null = null;
 	public sceneRenderData: SceneData | null = null;
 
@@ -49,7 +44,7 @@ export default class Sky {
 		this.camera = camera;
 
 		// load the skybox hdr texture
-		loadHDR(`/${skySettings.skyboxSource}.hdr`, 100.0).then((hdr) => {
+		loadHDR(`/${SKY_SETTINGS.skyboxSource}.hdr`, 100.0).then((hdr) => {
 			if (this.debug) {
 				console.log(
 					"Loaded hdr in ",
@@ -96,7 +91,7 @@ export default class Sky {
 			);
 			const skyboxCubemapTexture = device.createTexture({
 				label: "skybox cubemap texture",
-				size: [skySettings.skyboxResolution, skySettings.skyboxResolution, 6],
+				size: [SKY_SETTINGS.skyboxResolution, SKY_SETTINGS.skyboxResolution, 6],
 				format: "rgba16float",
 				sampleCount: 1,
 				dimension: "2d",
@@ -126,8 +121,8 @@ export default class Sky {
 				computePass.setPipeline(cubemapGeneratorPipeline);
 				computePass.setBindGroup(0, cubemapGeneratorBindGroup);
 				computePass.dispatchWorkgroups(
-					Math.ceil(skySettings.skyboxResolution / 8),
-					Math.ceil(skySettings.skyboxResolution / 8),
+					Math.ceil(SKY_SETTINGS.skyboxResolution / 8),
+					Math.ceil(SKY_SETTINGS.skyboxResolution / 8),
 					6,
 				);
 				computePass.end();
@@ -143,13 +138,13 @@ export default class Sky {
 					module: shaders.irradianceGenerator,
 					entryPoint: "compute_irradiance",
 					constants: {
-						delta: skySettings.irradianceSampleDelta,
+						delta: SKY_SETTINGS.irradianceSampleDelta,
 					},
 				},
 			});
 			const irradianceTexture = device.createTexture({
 				label: "irradiance texture",
-				size: [skySettings.irradianceResolution, skySettings.irradianceResolution, 6],
+				size: [SKY_SETTINGS.irradianceResolution, SKY_SETTINGS.irradianceResolution, 6],
 				format: "rgba16float",
 				sampleCount: 1,
 				dimension: "2d",
@@ -177,8 +172,8 @@ export default class Sky {
 				computePass.setPipeline(irradianceGeneratorPipeline);
 				computePass.setBindGroup(0, irradianceGeneratorBindGroup);
 				computePass.dispatchWorkgroups(
-					Math.ceil(skySettings.irradianceResolution / 4),
-					Math.ceil(skySettings.irradianceResolution / 4),
+					Math.ceil(SKY_SETTINGS.irradianceResolution / 4),
+					Math.ceil(SKY_SETTINGS.irradianceResolution / 4),
 					6,
 				);
 				computePass.end();
@@ -193,7 +188,7 @@ export default class Sky {
 					module: shaders.prefilterGenerator,
 					entryPoint: "compute_prefilter",
 					constants: {
-						sample_count: skySettings.prefilterSamples,
+						sample_count: SKY_SETTINGS.prefilterSamples,
 					},
 				},
 			});
@@ -207,20 +202,20 @@ export default class Sky {
 			});
 			const prefilterTexture = device.createTexture({
 				label: "prefilter texture",
-				size: [skySettings.prefilterResolution, skySettings.prefilterResolution, 6],
+				size: [SKY_SETTINGS.prefilterResolution, SKY_SETTINGS.prefilterResolution, 6],
 				format: "rgba16float",
 				sampleCount: 1,
 				dimension: "2d",
 				usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-				mipLevelCount: skySettings.prefilterMipLevels,
+				mipLevelCount: SKY_SETTINGS.prefilterMipLevels,
 			});
 			const prefilterGeneratorUniformBuffer = device.createBuffer({
 				label: "prefilter uniform buffer",
 				size: 4,
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			});
-			for (let i = 0; i < skySettings.prefilterMipLevels; i++) {
-				const roughness = i / (skySettings.prefilterMipLevels - 1);
+			for (let i = 0; i < SKY_SETTINGS.prefilterMipLevels; i++) {
+				const roughness = i / (SKY_SETTINGS.prefilterMipLevels - 1);
 				const prefilterGeneratorBindGroup = device.createBindGroup({
 					label: "prefilter generator bind group",
 					layout: prefilterGeneratorPipeline.getBindGroupLayout(0),
@@ -258,7 +253,7 @@ export default class Sky {
 				const pass = encoder.beginComputePass();
 				pass.setPipeline(prefilterGeneratorPipeline);
 				pass.setBindGroup(0, prefilterGeneratorBindGroup);
-				const mipResolution = skySettings.prefilterResolution / 2 ** i;
+				const mipResolution = SKY_SETTINGS.prefilterResolution / 2 ** i;
 				pass.dispatchWorkgroups(Math.ceil(mipResolution / 4), Math.ceil(mipResolution / 4), 6);
 				pass.end();
 				device.queue.submit([encoder.finish()]);
@@ -272,14 +267,14 @@ export default class Sky {
 					module: shaders.brdfGenerator,
 					entryPoint: "compute_brdf",
 					constants: {
-						sample_count: skySettings.brdfSamples,
-						lut_size: skySettings.brdfResolution,
+						sample_count: SKY_SETTINGS.brdfSamples,
+						lut_size: SKY_SETTINGS.brdfResolution,
 					},
 				},
 			});
 			const brdfLUT = device.createTexture({
 				label: "BRDF LUT",
-				size: [skySettings.brdfResolution, skySettings.brdfResolution],
+				size: [SKY_SETTINGS.brdfResolution, SKY_SETTINGS.brdfResolution],
 				format: "rgba16float",
 				sampleCount: 1,
 				dimension: "2d",
@@ -300,8 +295,8 @@ export default class Sky {
 			pass.setPipeline(brdfGeneratorPipeline);
 			pass.setBindGroup(0, brdfGeneratorBindGroup);
 			pass.dispatchWorkgroups(
-				Math.ceil(skySettings.brdfResolution / 8),
-				Math.ceil(skySettings.brdfResolution / 8),
+				Math.ceil(SKY_SETTINGS.brdfResolution / 8),
+				Math.ceil(SKY_SETTINGS.brdfResolution / 8),
 				1,
 			);
 			pass.end();
