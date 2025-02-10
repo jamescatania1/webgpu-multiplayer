@@ -23,7 +23,7 @@ export const SSAO_SETTINGS = {
 	fadeEnd: 105.0,
 };
 export const SHADOW_SETTINGS = {
-	resolution: 4096,
+	resolution: 2048,
 	cascades: [
 		{
 			depthScale: 300.0,
@@ -31,7 +31,7 @@ export const SHADOW_SETTINGS = {
 			far: 10.0,
 			bias: 0.0001,
 			normalBias: 0.1,
-			pcfRadius: 4,
+			pcfRadius: 2,
 		},
 		{
 			depthScale: 300.0,
@@ -418,14 +418,14 @@ export default class Renderer {
 				entryPoint: "fs",
 				targets: [{ format: "rgba16float" }, { format: "r16float" }],
 				constants: {
-					ssao_samples: SSAO_SETTINGS.sampleCount,
-					ssao_radius: SSAO_SETTINGS.radius,
-					ssao_bias: SSAO_SETTINGS.bias,
-					ssao_noise_scale: SSAO_SETTINGS.noiseScale,
-					ssao_fade_start: SSAO_SETTINGS.fadeStart,
-					ssao_fade_end: SSAO_SETTINGS.fadeEnd,
-					near: this.camera.near,
-					far: this.camera.far,
+					// ssao_samples: SSAO_SETTINGS.sampleCount,
+					// ssao_radius: SSAO_SETTINGS.radius,
+					// ssao_bias: SSAO_SETTINGS.bias,
+					// ssao_noise_scale: SSAO_SETTINGS.noiseScale,
+					// ssao_fade_start: SSAO_SETTINGS.fadeStart,
+					// ssao_fade_end: SSAO_SETTINGS.fadeEnd,
+					// near: this.camera.near,
+					// far: this.camera.far,
 				},
 			},
 			primitive: {
@@ -603,7 +603,7 @@ export default class Renderer {
 			this.timestampData = null;
 		}
 
-		loadBOBJ(this.device, "/city.bobj").then((data) => {
+		loadBOBJ(this.device, "/scene.bobj").then((data) => {
 			const model = new Model(this.device, this.camera, transformBindGroupLayout, data);
 			this.objects.push(model);
 		});
