@@ -60,13 +60,14 @@ export default class Model {
 			],
 		});
 
-		this.update(device);
+		this.update(device, camera);
 	}
 
-	public update(device: GPUDevice) {
+	public update(device: GPUDevice, camera: Camera) {
 		if (!this.modelData) {
 			return;
 		}
+		this.transform.update(camera);
 		this.transformBufferData.set(this.transform.matrix, 0);
 		this.transformBufferData.set(this.transform.normalMatrix, 16);
 		this.transformBufferData.set(this.modelData.offset, 16 + 12);

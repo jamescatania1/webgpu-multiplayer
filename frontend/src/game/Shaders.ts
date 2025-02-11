@@ -40,6 +40,7 @@ export function loadShaders(device: GPUDevice): Shaders {
 		templates: {
 			"ssao_samples": Math.round(SSAO_SETTINGS.sampleCount).toString(),
 			"shadow_cascades": Math.round(SHADOW_SETTINGS.cascades.length).toString(),
+			"shadow_kernel_size": Math.round(SHADOW_SETTINGS.kernelSize).toString(),
 		},
 	});
 	const depth = loadShader(device, {

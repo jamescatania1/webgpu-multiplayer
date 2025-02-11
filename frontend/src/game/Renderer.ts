@@ -24,6 +24,7 @@ export const SSAO_SETTINGS = {
 };
 export const SHADOW_SETTINGS = {
 	resolution: 2048,
+	kernelSize: 64,
 	cascades: [
 		{
 			depthScale: 300.0,
@@ -31,7 +32,8 @@ export const SHADOW_SETTINGS = {
 			far: 10.0,
 			bias: 0.0001,
 			normalBias: 0.1,
-			pcfRadius: 2,
+			samples: 48,
+			blockerSamples: 16,
 		},
 		{
 			depthScale: 300.0,
@@ -39,7 +41,8 @@ export const SHADOW_SETTINGS = {
 			far: 30.0,
 			bias: 0.00015,
 			normalBias: 0.15,
-			pcfRadius: 2,
+			samples: 24,
+			blockerSamples: 16,
 		},
 		{
 			depthScale: 300.0,
@@ -47,13 +50,14 @@ export const SHADOW_SETTINGS = {
 			far: 100.0,
 			bias: 0.0001,
 			normalBias: 0.15,
-			pcfRadius: 1,
+			samples: 8,
+			blockerSamples: 4,
 		},
 	],
 };
 export const SUN_SETTINGS = {
-	position: vec3.fromValues(20, 50, 17),
-	direction: vec3.normalize(vec3.fromValues(20, 50, 17)),
+	position: vec3.fromValues(20, 50, -17),
+	direction: vec3.normalize(vec3.fromValues(20, 50, -17)),
 	color: vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0)),
 	intensity: 0.75,
 };
@@ -144,6 +148,7 @@ export default class Renderer {
 
 		this.camera = new Camera(canvas);
 		this.camera.position[1] = 5.0;
+		this.camera.position[2] = 25.0;
 
 		this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 		this.ctx.configure({
@@ -151,7 +156,7 @@ export default class Renderer {
 			format: this.presentationFormat,
 		});
 
-		this.sky = new Sky(this, this.device, this.camera, this.shaders);
+		this.sky = new Sky(this, this.device, this.shaders);
 		this.shadowData = {
 			texture: null,
 		};
@@ -264,6 +269,18 @@ export default class Renderer {
 					sampler: {
 						type: "comparison",
 					},
+				},
+				{
+					binding: 9,
+					visibility: GPUShaderStage.FRAGMENT,
+					sampler: {
+						type: "non-filtering",
+					},
+				},
+				{
+					binding: 10,
+					visibility: GPUShaderStage.FRAGMENT,
+					buffer: {},
 				},
 			],
 		});
@@ -424,7 +441,7 @@ export default class Renderer {
 					// ssao_noise_scale: SSAO_SETTINGS.noiseScale,
 					// ssao_fade_start: SSAO_SETTINGS.fadeStart,
 					// ssao_fade_end: SSAO_SETTINGS.fadeEnd,
-					// near: this.camera.near,
+					near: this.camera.near,
 					// far: this.camera.far,
 				},
 			},
@@ -605,6 +622,8 @@ export default class Renderer {
 
 		loadBOBJ(this.device, "/scene.bobj").then((data) => {
 			const model = new Model(this.device, this.camera, transformBindGroupLayout, data);
+			model.transform.rotation[1] = Math.PI;
+			model.update(this.device, this.camera);
 			this.objects.push(model);
 		});
 	}
@@ -878,6 +897,34 @@ export default class Renderer {
 		}
 	}
 
+	/**
+	 * Updates the shadow cascade matrices and shadow data
+	 */
+	private updateShadows() {
+		this.camera.updateShadows(this.canvas);
+
+		// update shadow camera buffer
+		const cascadeBufferSize = 256 / 4;
+		for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
+			this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].view, i * cascadeBufferSize + 0);
+			this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].proj, i * cascadeBufferSize + 16);
+			this.uniformBufferData.shadows[i * cascadeBufferSize + 32] = SHADOW_SETTINGS.cascades[i].depthScale;
+			this.uniformBufferData.shadows[i * cascadeBufferSize + 33] = SHADOW_SETTINGS.cascades[i].bias;
+			this.uniformBufferData.shadows[i * cascadeBufferSize + 34] = SHADOW_SETTINGS.cascades[i].normalBias;
+			this.uniformBufferData.shadows[i * cascadeBufferSize + 35] = SHADOW_SETTINGS.cascades[i].samples;
+			this.uniformBufferData.shadows[i * cascadeBufferSize + 36] = SHADOW_SETTINGS.cascades[i].blockerSamples;
+			this.uniformBufferData.shadows[i * cascadeBufferSize + 37] = SHADOW_SETTINGS.cascades[i].near;
+			this.uniformBufferData.shadows[i * cascadeBufferSize + 38] = SHADOW_SETTINGS.cascades[i].far;
+		}
+		this.device.queue.writeBuffer(
+			this.uniformBuffers.shadows,
+			0,
+			this.uniformBufferData.shadows.buffer,
+			this.uniformBufferData.shadows.byteOffset,
+			this.uniformBufferData.shadows.byteLength,
+		);
+	}
+
 	public onLightingLoad() {
 		const skyData = this.sky.sceneRenderData;
 		if (!skyData) {
@@ -961,9 +1008,50 @@ export default class Renderer {
 			addressModeW: "clamp-to-edge",
 		});
 
-		const shadowmapSampler = this.device.createSampler({
+		const shadowmapComparisonSampler = this.device.createSampler({
 			compare: "less",
 		});
+
+		const shadowmapSampler = this.device.createSampler({
+			minFilter: "nearest",
+			magFilter: "nearest",
+		});
+
+		const shadowKernel = new Float32Array([
+			-0.613392, 0.617481, 0.0, 0.0, 0.170019, -0.040254, 0.0, 0.0, -0.299417, 0.791925, 0.0, 0.0, 0.64568,
+			0.49321, 0.0, 0.0, -0.651784, 0.717887, 0.0, 0.0, 0.421003, 0.02707, 0.0, 0.0, -0.817194, -0.271096, 0.0,
+			0.0, -0.705374, -0.668203, 0.0, 0.0, 0.97705, -0.108615, 0.0, 0.0, 0.063326, 0.142369, 0.0, 0.0, 0.203528,
+			0.214331, 0.0, 0.0, -0.667531, 0.32609, 0.0, 0.0, -0.098422, -0.295755, 0.0, 0.0, -0.885922, 0.215369, 0.0,
+			0.0, 0.566637, 0.605213, 0.0, 0.0, 0.039766, -0.3961, 0.0, 0.0, 0.751946, 0.453352, 0.0, 0.0, 0.078707,
+			-0.715323, 0.0, 0.0, -0.075838, -0.529344, 0.0, 0.0, 0.724479, -0.580798, 0.0, 0.0, 0.222999, -0.215125,
+			0.0, 0.0, -0.467574, -0.405438, 0.0, 0.0, -0.248268, -0.814753, 0.0, 0.0, 0.354411, -0.88757, 0.0, 0.0,
+			0.175817, 0.382366, 0.0, 0.0, 0.487472, -0.063082, 0.0, 0.0, -0.084078, 0.898312, 0.0, 0.0, 0.488876,
+			-0.783441, 0.0, 0.0, 0.470016, 0.217933, 0.0, 0.0, -0.69689, -0.549791, 0.0, 0.0, -0.149693, 0.605762, 0.0,
+			0.0, 0.034211, 0.97998, 0.0, 0.0, 0.503098, -0.308878, 0.0, 0.0, -0.016205, -0.872921, 0.0, 0.0, 0.385784,
+			-0.393902, 0.0, 0.0, -0.146886, -0.859249, 0.0, 0.0, 0.643361, 0.164098, 0.0, 0.0, 0.634388, -0.049471, 0.0,
+			0.0, -0.688894, 0.007843, 0.0, 0.0, 0.464034, -0.188818, 0.0, 0.0, -0.44084, 0.137486, 0.0, 0.0, 0.364483,
+			0.511704, 0.0, 0.0, 0.034028, 0.325968, 0.0, 0.0, 0.099094, -0.308023, 0.0, 0.0, 0.69396, -0.366253, 0.0,
+			0.0, 0.678884, -0.204688, 0.0, 0.0, 0.001801, 0.780328, 0.0, 0.0, 0.145177, -0.898984, 0.0, 0.0, 0.062655,
+			-0.611866, 0.0, 0.0, 0.315226, -0.604297, 0.0, 0.0, -0.780145, 0.486251, 0.0, 0.0, -0.371868, 0.882138, 0.0,
+			0.0, 0.200476, 0.49443, 0.0, 0.0, -0.494552, -0.711051, 0.0, 0.0, 0.612476, 0.705252, 0.0, 0.0, -0.578845,
+			-0.768792, 0.0, 0.0, -0.772454, -0.090976, 0.0, 0.0, 0.50444, 0.372295, 0.0, 0.0, 0.155736, 0.065157, 0.0,
+			0.0, 0.391522, 0.849605, 0.0, 0.0, -0.620106, -0.328104, 0.0, 0.0, 0.789239, -0.419965, 0.0, 0.0, -0.545396,
+			0.538133, 0.0, 0.0, -0.178564, -0.596057, 0.0, 0.0,
+		]);
+		for (let i = 0; i < shadowKernel.length; i += 4) {
+			const r = Math.sqrt(shadowKernel[i] * shadowKernel[i] + shadowKernel[i + 1] * shadowKernel[i + 1]);
+			const theta = Math.atan2(shadowKernel[i + 1], shadowKernel[i]);
+			shadowKernel[i] = r;
+			shadowKernel[i + 1] = theta;
+		}
+		const shadowKernelBuffer = this.device.createBuffer({
+			label: "shadow sample data buffer",
+			size: shadowKernel.byteLength,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		new Float32Array(shadowKernelBuffer.getMappedRange()).set(shadowKernel);
+		shadowKernelBuffer.unmap();
 
 		const sceneBindGroup = this.device.createBindGroup({
 			label: "ssao bind group",
@@ -1007,7 +1095,15 @@ export default class Renderer {
 				},
 				{
 					binding: 8,
+					resource: shadowmapComparisonSampler,
+				},
+				{
+					binding: 9,
 					resource: shadowmapSampler,
+				},
+				{
+					binding: 10,
+					resource: { buffer: shadowKernelBuffer, offset: 0, size: shadowKernel.byteLength },
 				},
 			],
 		});
@@ -1058,8 +1154,10 @@ export default class Renderer {
 		// update camera
 		this.camera.update(this.canvas);
 
-		// update sun
-		this.sky.update(this.camera);
+		// update shadows
+		if (input.keyDown("c")) {
+			this.updateShadows();
+		}
 
 		// update uniforms
 		{
@@ -1073,26 +1171,6 @@ export default class Renderer {
 				this.uniformBufferData.camera.buffer,
 				this.uniformBufferData.camera.byteOffset,
 				this.uniformBufferData.camera.byteLength,
-			);
-
-			// update shadow camera buffer
-			const cascadeBufferSize = 256 / 4;
-			for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
-				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].view, i * cascadeBufferSize + 0);
-				this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].proj, i * cascadeBufferSize + 16);
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 32] = SHADOW_SETTINGS.cascades[i].depthScale;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 33] = SHADOW_SETTINGS.cascades[i].bias;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 34] = SHADOW_SETTINGS.cascades[i].normalBias;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 35] = SHADOW_SETTINGS.cascades[i].pcfRadius;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 36] = SHADOW_SETTINGS.cascades[i].near;
-				this.uniformBufferData.shadows[i * cascadeBufferSize + 37] = SHADOW_SETTINGS.cascades[i].far;
-			}
-			this.device.queue.writeBuffer(
-				this.uniformBuffers.shadows,
-				0,
-				this.uniformBufferData.shadows.buffer,
-				this.uniformBufferData.shadows.byteOffset,
-				this.uniformBufferData.shadows.byteLength,
 			);
 
 			// rot proj matrix for the skybox

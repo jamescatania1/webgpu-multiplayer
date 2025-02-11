@@ -65,7 +65,7 @@
 				<span class="place-self-end text-nowrap text-sm font-light text-white"
 					>{(graphicsTime / 1000).toFixed(2)} ms</span
 				>
-				{#each Object.entries(gameStats.passes).toSorted((a, b) => b[1] - a[1]) as [pass, time], index}
+				{#each Object.entries(gameStats.passes) as [pass, time], index}
 					<div class="text-xs font-light text-white">
 						<span
 							class="mr-1 inline-block h-2 w-2 rounded-full border border-white bg-opacity-100"

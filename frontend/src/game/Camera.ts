@@ -88,8 +88,9 @@ export default class Camera {
 
 		mat4.lookAt(vec3.create(), this.forward, this.up, this.rotProjMatrix);
 		mat4.mul(this.projMatrix, this.rotProjMatrix, this.rotProjMatrix);
+	}
 
-		// update the shadow camera matrices
+	public updateShadows(canvas: HTMLCanvasElement) {
 		for (let c = 0; c < SHADOW_SETTINGS.cascades.length; c++) {
 			mat4.perspective(
 				(this.fov * Math.PI) / 180,

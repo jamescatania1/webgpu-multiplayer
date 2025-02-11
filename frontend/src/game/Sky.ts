@@ -1,5 +1,4 @@
 import { mat4, vec3 } from "wgpu-matrix";
-import Camera from "./Camera";
 import HDRjs from "./utils/hdr";
 import loadHDR from "./utils/hdr";
 import type { Shaders } from "./Shaders";
@@ -32,16 +31,12 @@ export default class Sky {
 	public skyboxRenderData: SkyboxRenderData | null = null;
 	public sceneRenderData: SceneData | null = null;
 
-	private readonly camera: Camera;
-
-	constructor(renderer: Renderer, device: GPUDevice, camera: Camera, shaders: Shaders) {
+	constructor(renderer: Renderer, device: GPUDevice, shaders: Shaders) {
 		let startTime: number;
 		if (this.debug) {
 			console.log("Loading skybox hdr...");
 			startTime = performance.now();
 		}
-
-		this.camera = camera;
 
 		// load the skybox hdr texture
 		loadHDR(`/${SKY_SETTINGS.skyboxSource}.hdr`, 100.0).then((hdr) => {
@@ -314,16 +309,6 @@ export default class Sky {
 
 			renderer.onLightingLoad();
 		});
-	}
-
-	public update(camera: Camera) {
-		// mat4.lookAt(
-		// 	vec3.add(camera.position, this.sunPosition),
-		// 	camera.position,
-		// 	vec3.fromValues(0, 1, 0),
-		// 	this.sunViewMatrix,
-		// );
-		// mat4.lookAt(this.sunPosition, vec3.fromValues(0,0,0), vec3.fromValues(0, 1, 0), this.sunViewMatrix);
 	}
 
 	private createSkyboxRenderData(device: GPUDevice, shaders: Shaders, skybox: GPUTexture): SkyboxRenderData {

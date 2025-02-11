@@ -20,7 +20,8 @@ struct ShadowData {
     depth_scale: f32,
     bias: f32,
     normal_bias: f32,
-    pcf_radius: f32,
+    samples: f32,
+    blocker_samples: f32,
     near: f32,
     far: f32,
     align_padding_1: vec4<f32>,
@@ -57,7 +58,9 @@ struct LightingData {
     sun_color: vec4<f32>,
 };
 @group(3) @binding(7) var<uniform> u_lighting: LightingData;
-@group(3) @binding(8) var u_shadowmap_sampler: sampler_comparison;
+@group(3) @binding(8) var u_shadowmap_sampler_comparison: sampler_comparison;
+@group(3) @binding(9) var u_shadowmap_sampler: sampler;
+@group(3) @binding(10) var<uniform> u_shadowmap_kernel:  array<vec4<f32>, TEMPL_shadow_kernel_size>;
 
 struct VertexIn { 
     @location(0) vertex_xyzc: vec2<u32>,
@@ -174,32 +177,87 @@ fn shadow_clip_pos(cascade: i32, n: vec3<f32>, cos_lo: f32, world_pos: vec4<f32>
 //     return occlusion;
 // }
 
-fn shadow(cascade_index: i32, shadow_clip_pos: vec4<f32>, normal: vec3<f32>) -> f32 {
-    let frag_depth = shadow_clip_pos.z / shadow_clip_pos.w;
-    var shadowmap_pos: vec2<f32> = shadow_clip_pos.xy / shadow_clip_pos.w;
-    shadowmap_pos = shadowmap_pos * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+const sun_size: f32 = 2.0;
+
+fn shadow_blocker_distance(cascade_index: i32, shadow_pos: vec3<f32>, hash: f32) -> f32 {
+    let frag_depth = shadow_pos.z;
+    let shadowmap_pos = shadow_pos.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+    if (shadowmap_pos.x < 0.0 || shadowmap_pos.x > 1.0 || shadowmap_pos.y < 0.0 || shadowmap_pos.y > 1.0 || frag_depth > 1.0) {
+        return -1.0;
+    }
 
     let texel_size: vec2<f32> = vec2<f32>(1.0) / vec2<f32>(textureDimensions(u_shadowmap).xy);
-    var res: f32 = 0.0;
-    let shadow_pcf_radius: i32 = i32(u_shadow[cascade_index].pcf_radius);
-    for (var i: i32 = -shadow_pcf_radius; i <= shadow_pcf_radius; i++) {
-        for (var j: i32 = -shadow_pcf_radius; j <= shadow_pcf_radius; j++) {
-            let sample_pos = shadowmap_pos + vec2<f32>(f32(i), f32(j)) * texel_size * 5.0;
-            res += 1.0 - textureSampleCompareLevel(
-                u_shadowmap, 
-                u_shadowmap_sampler,
-                sample_pos,
-                cascade_index,
-                frag_depth - u_shadow[cascade_index].bias
-            );
+    var search_radius: f32 = sun_size * (frag_depth - near) / frag_depth;
+    search_radius = 15.0;
+    let samples: i32 = i32(u_shadow[cascade_index].blocker_samples);
+    // if (search_radius <= 0.0) {
+    //     return -1.0;
+    // }
+    // let search_range = clamp(i32(search_radius), 1, 4);
+
+    var blocker_count: i32 = 0;
+    var blocker_distance: f32 = 0.0;
+    for (var i: i32 = 0; i < samples; i++) {
+        let r_theta: vec2<f32> = u_shadowmap_kernel[i].xy + vec2<f32>(0.0, hash);
+        let sample_offset: vec2<f32> = vec2<f32>(cos(r_theta.y), sin(r_theta.y)) * search_radius;
+        let sample_pos: vec2<f32> = shadowmap_pos + sample_offset * texel_size;
+        let sample_depth = textureSampleLevel(u_shadowmap, u_shadowmap_sampler, sample_pos, cascade_index, 0);
+        if (sample_depth < frag_depth) {
+            blocker_count += 1;
+            blocker_distance += sample_depth;
         }
     }
-    res /= f32((2 * shadow_pcf_radius + 1) * (2 * shadow_pcf_radius + 1));
-    if (shadowmap_pos.x < 0.0 || shadowmap_pos.x > 1.0 || shadowmap_pos.y < 0.0 || shadowmap_pos.y > 1.0 || frag_depth > 1.0) {
-        res *= 0.0;
+
+    // for (var i: i32 = -sample_radius; i <= sample_radius; i++) {
+    //     for (var j: i32 = -sample_radius; j <= sample_radius; j++) {
+    //         let sample_pos = shadowmap_pos + vec2<f32>(f32(i), f32(j)) * search_radius / f32(sample_radius);
+    //         let sample_depth = textureSampleLevel(u_shadowmap, u_shadowmap_sampler, sample_pos, cascade_index, 0);
+    //         if (sample_depth < frag_depth - u_shadow[cascade_index].bias) {
+    //             blocker_count += 1;
+    //             blocker_distance += sample_depth;
+    //         }
+    //     }
+    // }
+
+    if (blocker_count > 0) {
+        return blocker_distance / f32(blocker_count);
+    } else {
+        return -1.0;
+    }
+    // return f32(blocker_count) / 64.0;
+}
+
+fn shadow(cascade_index: i32, shadow_pos: vec3<f32>, world_pos: vec3<f32>) -> f32 {
+    let hash: f32 = fract(sin(dot(world_pos, vec3<f32>(12.9898, 78.233, 151.7182))) * 43758.5453);
+    let texel_size: vec2<f32> = vec2<f32>(1.0) / vec2<f32>(textureDimensions(u_shadowmap).xy);
+
+    let blocker_distance: f32 = shadow_blocker_distance(cascade_index, shadow_pos, hash);
+    if (blocker_distance < 0.0) {
+        return 0.0;
     }
 
+    let frag_depth: f32 = shadow_pos.z;
+    let shadowmap_pos: vec2<f32> = shadow_pos.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+    let samples: i32 = i32(u_shadow[cascade_index].samples);
+    let penumbra_width: f32 = clamp(sun_size * (frag_depth - blocker_distance) / blocker_distance, 0.02, 0.2);
+
+    var res: f32 = 0.0;
+    for (var i: i32 = 0; i < samples; i++) {
+        let r_theta: vec2<f32> = u_shadowmap_kernel[i].xy + vec2<f32>(0.0, hash * 1.0);
+        let sample_offset: vec2<f32> = vec2<f32>(cos(r_theta.y), sin(r_theta.y)) * r_theta.x * penumbra_width;
+        let sample_pos: vec2<f32> = shadowmap_pos + sample_offset * texel_size * 150.0;
+        res += 1.0 - textureSampleCompareLevel(
+            u_shadowmap, 
+            u_shadowmap_sampler_comparison,
+            sample_pos,
+            cascade_index,
+            frag_depth - u_shadow[cascade_index].bias
+        );
+    }
+    res /= f32(samples);
     return res;
+    // return penumbra_width * 10.0;
+    // return blocker_distance;
 }
 
 @fragment 
@@ -240,21 +298,21 @@ fn fs(in: VertexOut) -> FragmentOut {
     let view_depth = abs(in.view_pos.z);
     var shadow_factor: f32 = 0.0;
     if (view_depth < u_shadow[0].far) {
-        shadow_factor = shadow(0, in.shadow_clip_pos_0, n);
+        shadow_factor = shadow(0, in.shadow_clip_pos_0.xyz / in.shadow_clip_pos_0.w, in.world_pos);
         if (u_shadow[1].near < view_depth) {
-            let shadow_factor_alt = shadow(1, in.shadow_clip_pos_1, n);
+            let shadow_factor_alt = shadow(1, in.shadow_clip_pos_1.xyz / in.shadow_clip_pos_1.w, in.world_pos);
             shadow_factor = mix(shadow_factor, shadow_factor_alt, (view_depth - u_shadow[1].near) / (u_shadow[0].far - u_shadow[1].near));
         }
     }
     else if (view_depth < u_shadow[1].far) {
-        shadow_factor = shadow(1, in.shadow_clip_pos_1, n);
+        shadow_factor = shadow(1, in.shadow_clip_pos_1.xyz / in.shadow_clip_pos_1.w, in.world_pos);
         if (u_shadow[2].near < view_depth) {
-            let shadow_factor_alt = shadow(2, in.shadow_clip_pos_2, n);
+            let shadow_factor_alt = shadow(2, in.shadow_clip_pos_2.xyz / in.shadow_clip_pos_2.w, in.world_pos);
             shadow_factor = mix(shadow_factor, shadow_factor_alt, (view_depth - u_shadow[2].near) / (u_shadow[1].far - u_shadow[2].near));
         }
     }
     else if (view_depth < u_shadow[2].far) {
-        shadow_factor = shadow(2, in.shadow_clip_pos_2, n);
+        shadow_factor = shadow(2, in.shadow_clip_pos_2.xyz / in.shadow_clip_pos_2.w, in.world_pos);
     }
 
     light += directional * (1.0 - shadow_factor);
