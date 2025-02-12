@@ -11,7 +11,7 @@ const MAX_VEL = 1.0;
 const ACCEL = 0.01;
 const MOUSE_SENSITIVITY = 2.0;
 
-export const DEBUG_GRAPHICS_TIME = true;
+export const DEBUG_GRAPHICS_TIME = false;
 export const SSAO_SETTINGS = {
 	sampleCount: 32,
 	radius: 0.4,

@@ -190,10 +190,6 @@ fn shadow_blocker_distance(cascade_index: i32, shadow_pos: vec3<f32>, hash: f32)
     var search_radius: f32 = sun_size * (frag_depth - near) / frag_depth;
     search_radius = 15.0;
     let samples: i32 = i32(u_shadow[cascade_index].blocker_samples);
-    // if (search_radius <= 0.0) {
-    //     return -1.0;
-    // }
-    // let search_range = clamp(i32(search_radius), 1, 4);
 
     var blocker_count: i32 = 0;
     var blocker_distance: f32 = 0.0;
@@ -208,23 +204,11 @@ fn shadow_blocker_distance(cascade_index: i32, shadow_pos: vec3<f32>, hash: f32)
         }
     }
 
-    // for (var i: i32 = -sample_radius; i <= sample_radius; i++) {
-    //     for (var j: i32 = -sample_radius; j <= sample_radius; j++) {
-    //         let sample_pos = shadowmap_pos + vec2<f32>(f32(i), f32(j)) * search_radius / f32(sample_radius);
-    //         let sample_depth = textureSampleLevel(u_shadowmap, u_shadowmap_sampler, sample_pos, cascade_index, 0);
-    //         if (sample_depth < frag_depth - u_shadow[cascade_index].bias) {
-    //             blocker_count += 1;
-    //             blocker_distance += sample_depth;
-    //         }
-    //     }
-    // }
-
     if (blocker_count > 0) {
         return blocker_distance / f32(blocker_count);
     } else {
         return -1.0;
     }
-    // return f32(blocker_count) / 64.0;
 }
 
 fn shadow(cascade_index: i32, shadow_pos: vec3<f32>, world_pos: vec3<f32>) -> f32 {
@@ -254,10 +238,7 @@ fn shadow(cascade_index: i32, shadow_pos: vec3<f32>, world_pos: vec3<f32>) -> f3
             frag_depth - u_shadow[cascade_index].bias
         );
     }
-    res /= f32(samples);
-    return res;
-    // return penumbra_width * 10.0;
-    // return blocker_distance;
+    return res / f32(samples);
 }
 
 @fragment 

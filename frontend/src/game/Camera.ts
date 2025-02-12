@@ -109,34 +109,80 @@ export default class Camera {
 				vec4.divScalar(this.corners[i], this.corners[i][3], this.corners[i]);
 				vec4.add(this.center, this.corners[i], this.center);
 			}
+
 			vec4.divScalar(this.center, 8, this.center);
 			vec3.set(this.center[0], this.center[1], this.center[2], this.centerXYZ);
-			vec3.add(this.centerXYZ, SUN_SETTINGS.direction, this.shadowEye);
-			mat4.lookAt(this.shadowEye, this.centerXYZ, this.up, this.cascadeMatrices[c].view);
-	
-			vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);
-			vec3.set(-Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE, this.maxComponents);
-			for (const corner of this.corners) {
-				mat4.multiply(this.cascadeMatrices[c].view, corner, corner);
-				for (let k = 0; k < 3; k++) {
-					this.minComponents[k] = Math.min(this.minComponents[k], corner[k]);
-					this.maxComponents[k] = Math.max(this.maxComponents[k], corner[k]);
-				}
+
+			let radius = 0;
+			for (let i = 0; i < 8; i++) {
+				radius = Math.max(radius, vec3.distance(this.centerXYZ, vec3.fromValues(this.corners[i][0], this.corners[i][1], this.corners[i][2])));
 			}
-	
-			const shadowZMultiplier = 10.0;
-			this.minComponents[2] *= this.minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier;
-			this.maxComponents[2] *= this.maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier;
-	
+			const maxExtents = vec3.fromValues(radius, radius, radius);
+			const minExtents = vec3.fromValues(-radius, -radius, -radius);
+			const extents = vec3.sub(maxExtents, minExtents);
+			const shadowEye = vec3.add(SUN_SETTINGS.direction, this.centerXYZ);
 			mat4.ortho(
-				this.minComponents[0],
-				this.maxComponents[0],
-				this.minComponents[1],
-				this.maxComponents[1],
-				this.minComponents[2],
-				this.maxComponents[2],
+				minExtents[0],
+				maxExtents[0],
+				minExtents[1],
+				maxExtents[1],
+				minExtents[2],
+				maxExtents[2],
 				this.cascadeMatrices[c].proj,
 			);
+			mat4.lookAt(shadowEye, this.centerXYZ, this.up, this.cascadeMatrices[c].view);
+
+			const shadowOrigin = vec4.fromValues(0, 0, 0, 1);
+			vec4.transformMat4(shadowOrigin, this.shadowProjMatrix, shadowOrigin);
+			vec4.mulScalar(shadowOrigin, SHADOW_SETTINGS.resolution / 2.0, shadowOrigin);
+
+			vec3.add(this.centerXYZ, SUN_SETTINGS.direction, this.shadowEye);
+			mat4.lookAt(this.shadowEye, this.centerXYZ, this.up, this.cascadeMatrices[c].view);
+
+			const roundedOrigin = vec4.fromValues(
+				Math.round(shadowOrigin[0]),
+				Math.round(shadowOrigin[1]),
+				Math.round(shadowOrigin[2]),
+				Math.round(shadowOrigin[3]),
+			);
+			const roundedOriginDiff = vec4.sub(shadowOrigin, roundedOrigin);
+			vec4.mulScalar(roundedOriginDiff, 2.0 / SHADOW_SETTINGS.resolution, roundedOriginDiff);
+			this.cascadeMatrices[c].proj[12] += roundedOriginDiff[0];
+			this.cascadeMatrices[c].proj[13] += roundedOriginDiff[1];
+			this.cascadeMatrices[c].proj[14] += roundedOriginDiff[2];
+			
+	
+			// vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);
+			// vec3.set(-Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE, this.maxComponents);
+			// for (const corner of this.corners) {
+			// 	mat4.multiply(this.cascadeMatrices[c].view, corner, corner);
+			// 	for (let k = 0; k < 3; k++) {
+			// 		this.minComponents[k] = Math.min(this.minComponents[k], corner[k]);
+			// 		this.maxComponents[k] = Math.max(this.maxComponents[k], corner[k]);
+			// 	}
+			// }
+	
+			// const shadowZMultiplier = 10.0;
+			// this.minComponents[2] *= this.minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier;
+			// this.maxComponents[2] *= this.maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier;
+	
+			// mat4.ortho(
+			// 	this.minComponents[0],
+			// 	this.maxComponents[0],
+			// 	this.minComponents[1],
+			// 	this.maxComponents[1],
+			// 	this.minComponents[2],
+			// 	this.maxComponents[2],
+			// 	this.cascadeMatrices[c].proj,
+			// );
+
+			// // stabilize the cascade matrices
+			// const diameter = vec3.distance(this.corners[0], this.corners[7]) / 2.0;
+			// const meterTexels = diameter / SHADOW_SETTINGS.resolution;
+
+			// const shadowOrigin = vec4.fromValues(0, 0, 0, 1);
+			// vec4.transformMat4(shadowOrigin, this.shadowProjMatrix, shadowOrigin);
+			// vec4.divScalar(shadowOrigin, meterTexels, shadowOrigin);
 		}
 	}
 }
