@@ -319,6 +319,16 @@ fn fs(in: VertexOut) -> FragmentOut {
 
     var color: vec3<f32> = light;
 
+    // var cascade_index: i32 = 0;
+    // if (view_depth < u_shadow[0].far) {
+    //     cascade_index = 0;
+    // }
+    // else if (view_depth < u_shadow[1].far) {
+    //     cascade_index = 1;
+    // }
+    // else if (view_depth < u_shadow[2].far) {
+    //     cascade_index = 2;
+    // }
     // if (cascade_index == 0) {
     //     color = mix(color, vec3<f32>(1.0, 0.0, 0.0), 0.1);
     // }
