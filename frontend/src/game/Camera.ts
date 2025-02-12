@@ -98,6 +98,9 @@ export default class Camera {
 		mat4.mul(this.projMatrix, this.rotProjMatrix, this.rotProjMatrix);
 	}
 
+	private readonly minComponents = vec3.create();
+	private readonly maxComponents = vec3.create();
+
 	public updateShadows(canvas: HTMLCanvasElement) {
 		for (let c = 0; c < SHADOW_SETTINGS.cascades.length; c++) {
 			mat4.perspective(
@@ -129,70 +132,70 @@ export default class Camera {
 			vec3.add(this.center, SUN_SETTINGS.direction, this.shadowEye);
 			mat4.lookAt(this.shadowEye, this.center, this.up, this.cascadeMatrices[c].view);
 
-			const minOrtho = vec3.fromValues(-radius, -radius, -radius);
-			const maxOrtho = vec3.fromValues(radius, radius, radius);
-			vec3.add(this.center, minOrtho, minOrtho);
-			vec3.add(this.center, maxOrtho, maxOrtho);
+			// const minOrtho = vec3.fromValues(-radius, -radius, -radius);
+			// const maxOrtho = vec3.fromValues(radius, radius, radius);
+			// vec3.add(this.center, minOrtho, minOrtho);
+			// vec3.add(this.center, maxOrtho, maxOrtho);
 
-			const minComponents = mat4.multiply(this.cascadeMatrices[c].view, vec4.fromValues(minOrtho[0], minOrtho[1], minOrtho[2], 1.0));
-			const maxComponents = mat4.multiply(this.cascadeMatrices[c].view, vec4.fromValues(maxOrtho[0], maxOrtho[1], maxOrtho[2], 1.0));
+			// const minComponents = mat4.multiply(this.cascadeMatrices[c].view, vec4.fromValues(minOrtho[0], minOrtho[1], minOrtho[2], 1.0));
+			// const maxComponents = mat4.multiply(this.cascadeMatrices[c].view, vec4.fromValues(maxOrtho[0], maxOrtho[1], maxOrtho[2], 1.0));
 			
-			const near = minComponents[2] * (minComponents[2] < 0 ? 10.0 : 0.1);
-			const far = maxComponents[2] * (maxComponents[2] < 0 ? 0.1 : 10.0);
-			mat4.ortho(
-				-radius,
-				radius,
-				-radius,
-				radius,
-				near,
-				far,
-				this.cascadeMatrices[c].proj,
-			);
-
-			// stabilize the cascade matrices
-			mat4.mul(this.cascadeMatrices[c].proj, this.cascadeMatrices[c].view, this.shadowProjMatrix);
-			vec4.set(0, 0, 0, 1, this.shadowOrigin);
-			vec4.transformMat4(this.shadowOrigin, this.shadowProjMatrix, this.shadowOrigin);
-			const w = this.shadowOrigin[3];
-			vec4.mulScalar(this.shadowOrigin, SHADOW_SETTINGS.resolution / 2.0, this.shadowOrigin);
-
-			vec4.set(
-				Math.round(this.shadowOrigin[0]),
-				Math.round(this.shadowOrigin[1]),
-				Math.round(this.shadowOrigin[2]),
-				Math.round(this.shadowOrigin[3]),
-				this.roundedOrigin,
-			);
-			vec4.sub(this.shadowOrigin, this.roundedOrigin, this.roundedOffset);
-			vec4.mulScalar(this.roundedOffset, 2.0 / SHADOW_SETTINGS.resolution, this.roundedOffset);
-			this.cascadeMatrices[c].proj[12] += this.roundedOffset[0];
-			this.cascadeMatrices[c].proj[13] += this.roundedOffset[1];
-			this.cascadeMatrices[c].proj[14] += this.roundedOffset[2];
-			
-	
-			// vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);
-			// vec3.set(-Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE, this.maxComponents);
-			// for (const corner of this.corners) {
-			// 	mat4.multiply(this.cascadeMatrices[c].view, corner, corner);
-			// 	for (let k = 0; k < 3; k++) {
-			// 		this.minComponents[k] = Math.min(this.minComponents[k], corner[k]);
-			// 		this.maxComponents[k] = Math.max(this.maxComponents[k], corner[k]);
-			// 	}
-			// }
-	
-			// const shadowZMultiplier = 10.0;
-			// this.minComponents[2] *= this.minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier;
-			// this.maxComponents[2] *= this.maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier;
-	
+			// const near = minComponents[2] * (minComponents[2] < 0 ? 10.0 : 0.1);
+			// const far = maxComponents[2] * (maxComponents[2] < 0 ? 0.1 : 10.0);
 			// mat4.ortho(
-			// 	this.minComponents[0],
-			// 	this.maxComponents[0],
-			// 	this.minComponents[1],
-			// 	this.maxComponents[1],
-			// 	this.minComponents[2],
-			// 	this.maxComponents[2],
+			// 	-radius,
+			// 	radius,
+			// 	-radius,
+			// 	radius,
+			// 	near,
+			// 	far,
 			// 	this.cascadeMatrices[c].proj,
 			// );
+
+			// stabilize the cascade matrices
+			// mat4.mul(this.cascadeMatrices[c].proj, this.cascadeMatrices[c].view, this.shadowProjMatrix);
+			// vec4.set(0, 0, 0, 1, this.shadowOrigin);
+			// vec4.transformMat4(this.shadowOrigin, this.shadowProjMatrix, this.shadowOrigin);
+			// const w = this.shadowOrigin[3];
+			// vec4.mulScalar(this.shadowOrigin, SHADOW_SETTINGS.resolution / 2.0, this.shadowOrigin);
+
+			// vec4.set(
+			// 	Math.round(this.shadowOrigin[0]),
+			// 	Math.round(this.shadowOrigin[1]),
+			// 	Math.round(this.shadowOrigin[2]),
+			// 	Math.round(this.shadowOrigin[3]),
+			// 	this.roundedOrigin,
+			// );
+			// vec4.sub(this.shadowOrigin, this.roundedOrigin, this.roundedOffset);
+			// vec4.mulScalar(this.roundedOffset, 2.0 / SHADOW_SETTINGS.resolution, this.roundedOffset);
+			// this.cascadeMatrices[c].proj[12] += this.roundedOffset[0];
+			// this.cascadeMatrices[c].proj[13] += this.roundedOffset[1];
+			// this.cascadeMatrices[c].proj[14] += this.roundedOffset[2];
+			
+	
+			vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);
+			vec3.set(-Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE, this.maxComponents);
+			for (const corner of this.corners) {
+				mat4.multiply(this.cascadeMatrices[c].view, corner, corner);
+				for (let k = 0; k < 3; k++) {
+					this.minComponents[k] = Math.min(this.minComponents[k], corner[k]);
+					this.maxComponents[k] = Math.max(this.maxComponents[k], corner[k]);
+				}
+			}
+	
+			const shadowZMultiplier = 10.0;
+			this.minComponents[2] *= this.minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier;
+			this.maxComponents[2] *= this.maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier;
+	
+			mat4.ortho(
+				this.minComponents[0],
+				this.maxComponents[0],
+				this.minComponents[1],
+				this.maxComponents[1],
+				this.minComponents[2],
+				this.maxComponents[2],
+				this.cascadeMatrices[c].proj,
+			);
 
 			// // stabilize the cascade matrices
 			// const diameter = vec3.distance(this.corners[0], this.corners[7]) / 2.0;

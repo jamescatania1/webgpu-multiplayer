@@ -11,7 +11,7 @@ const MAX_VEL = 1.0;
 const ACCEL = 0.01;
 const MOUSE_SENSITIVITY = 2.0;
 
-export const DEBUG_GRAPHICS_TIME = true;
+export const DEBUG_GRAPHICS_TIME = false;
 export const SSAO_SETTINGS = {
 	sampleCount: 32,
 	radius: 0.4,
@@ -59,7 +59,7 @@ export const SUN_SETTINGS = {
 	position: vec3.fromValues(20, 50, -17),
 	direction: vec3.normalize(vec3.fromValues(20, 50, -17)),
 	color: vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0)),
-	intensity: 0.75,
+	intensity: 1.5,
 };
 export const SKY_SETTINGS = {
 	skyboxSource: "sky",
@@ -71,6 +71,14 @@ export const SKY_SETTINGS = {
 	prefilterSamples: 2048,
 	brdfResolution: 1024,
 	brdfSamples: 2048,
+};
+export const POSTFX_SETTINGS = {
+	exposure: 0.4,
+	temperature: 0.2,
+	tint: 0.1,
+	contrast: 1.0,
+	brightness: 0.0,
+	gamma: 2.2,
 };
 
 export default class Renderer {
@@ -482,6 +490,9 @@ export default class Renderer {
 				module: this.shaders.postFX,
 				entryPoint: "fs",
 				targets: [{ format: this.presentationFormat }],
+				constants: {
+					...POSTFX_SETTINGS,
+				}
 			},
 			primitive: {
 				topology: "triangle-strip",
@@ -1155,7 +1166,7 @@ export default class Renderer {
 		this.camera.update(this.canvas);
 
 		// update shadows
-		if (input.keyDown("c")) {
+		if (!input.keyDown("c")) {
 			this.updateShadows();
 		}
 
