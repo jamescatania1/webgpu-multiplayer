@@ -46,13 +46,14 @@ export default class Camera {
 		vec4.fromValues(1, 1, 0, 1.0),
 		vec4.fromValues(1, 1, 1, 1.0),
 	];
+	private readonly stablePosition = vec3.create();
+	private readonly stableViewMatrix = mat4.create();
 	private readonly shadowProjMatrix = mat4.create();
-	private readonly center = vec4.create();
-	private readonly centerXYZ = vec3.create();
+	private readonly center = vec3.create();
 	private readonly shadowEye = vec3.create();
 	private readonly shadowOrigin = vec4.create();
 	private readonly roundedOrigin = vec4.create();
-	private readonly roundedOriginDiff = vec4.create();
+	private readonly roundedOffset = vec4.create();
 
 	constructor(canvas: HTMLCanvasElement) {
 		this.position[1] = 2.0;
@@ -87,6 +88,12 @@ export default class Camera {
 		mat4.mul(this.projMatrix, this.viewMatrix, this.viewProjMatrix);
 		mat4.invert(this.projMatrix, this.projMatrixInverse);
 
+		if (vec3.distSq(this.stablePosition, this.position) > 0.01) {
+			vec3.copy(this.position, this.stablePosition);
+		}
+
+		mat4.lookAt(this.stablePosition, vec3.add(this.stablePosition, this.forward, vec3.create()), this.up, this.stableViewMatrix);
+
 		mat4.lookAt(vec3.create(), this.forward, this.up, this.rotProjMatrix);
 		mat4.mul(this.projMatrix, this.rotProjMatrix, this.rotProjMatrix);
 	}
@@ -100,7 +107,7 @@ export default class Camera {
 				SHADOW_SETTINGS.cascades[c].far,
 				this.shadowProjMatrix,
 			);
-			mat4.mul(this.shadowProjMatrix, this.viewMatrix, this.shadowProjMatrix);
+			mat4.mul(this.shadowProjMatrix, this.stableViewMatrix, this.shadowProjMatrix);
 			mat4.invert(this.shadowProjMatrix, this.shadowProjMatrix);
 
 			vec4.zero(this.center);
@@ -112,29 +119,42 @@ export default class Camera {
 			}
 
 			vec4.divScalar(this.center, 8, this.center);
-			vec3.set(this.center[0], this.center[1], this.center[2], this.centerXYZ);
 
 			let radius = 0;
 			for (let i = 0; i < 8; i++) {
-				radius = Math.max(radius, vec3.distance(this.centerXYZ, vec3.fromValues(this.corners[i][0], this.corners[i][1], this.corners[i][2])));
+				radius = Math.max(radius, vec3.distance(this.center, this.corners[i]));
 			}
+			radius = Math.ceil(radius);
 
+			vec3.add(this.center, SUN_SETTINGS.direction, this.shadowEye);
+			mat4.lookAt(this.shadowEye, this.center, this.up, this.cascadeMatrices[c].view);
+
+			const minOrtho = vec3.fromValues(-radius, -radius, -radius);
+			const maxOrtho = vec3.fromValues(radius, radius, radius);
+			vec3.add(this.center, minOrtho, minOrtho);
+			vec3.add(this.center, maxOrtho, maxOrtho);
+
+			const minComponents = mat4.multiply(this.cascadeMatrices[c].view, vec4.fromValues(minOrtho[0], minOrtho[1], minOrtho[2], 1.0));
+			const maxComponents = mat4.multiply(this.cascadeMatrices[c].view, vec4.fromValues(maxOrtho[0], maxOrtho[1], maxOrtho[2], 1.0));
+			
+			const near = minComponents[2] * (minComponents[2] < 0 ? 10.0 : 0.1);
+			const far = maxComponents[2] * (maxComponents[2] < 0 ? 0.1 : 10.0);
 			mat4.ortho(
 				-radius,
 				radius,
 				-radius,
 				radius,
-				-radius * 10,
-				radius * 10,
+				near,
+				far,
 				this.cascadeMatrices[c].proj,
 			);
 
+			// stabilize the cascade matrices
+			mat4.mul(this.cascadeMatrices[c].proj, this.cascadeMatrices[c].view, this.shadowProjMatrix);
 			vec4.set(0, 0, 0, 1, this.shadowOrigin);
 			vec4.transformMat4(this.shadowOrigin, this.shadowProjMatrix, this.shadowOrigin);
+			const w = this.shadowOrigin[3];
 			vec4.mulScalar(this.shadowOrigin, SHADOW_SETTINGS.resolution / 2.0, this.shadowOrigin);
-
-			vec3.add(this.centerXYZ, SUN_SETTINGS.direction, this.shadowEye);
-			mat4.lookAt(this.shadowEye, this.centerXYZ, this.up, this.cascadeMatrices[c].view);
 
 			vec4.set(
 				Math.round(this.shadowOrigin[0]),
@@ -143,11 +163,11 @@ export default class Camera {
 				Math.round(this.shadowOrigin[3]),
 				this.roundedOrigin,
 			);
-			vec4.sub(this.shadowOrigin, this.roundedOrigin, this.roundedOriginDiff);
-			vec4.mulScalar(this.roundedOriginDiff, 2.0 / SHADOW_SETTINGS.resolution, this.roundedOriginDiff);
-			this.cascadeMatrices[c].proj[12] += this.roundedOriginDiff[0];
-			this.cascadeMatrices[c].proj[13] += this.roundedOriginDiff[1];
-			this.cascadeMatrices[c].proj[14] += this.roundedOriginDiff[2];
+			vec4.sub(this.shadowOrigin, this.roundedOrigin, this.roundedOffset);
+			vec4.mulScalar(this.roundedOffset, 2.0 / SHADOW_SETTINGS.resolution, this.roundedOffset);
+			this.cascadeMatrices[c].proj[12] += this.roundedOffset[0];
+			this.cascadeMatrices[c].proj[13] += this.roundedOffset[1];
+			this.cascadeMatrices[c].proj[14] += this.roundedOffset[2];
 			
 	
 			// vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);

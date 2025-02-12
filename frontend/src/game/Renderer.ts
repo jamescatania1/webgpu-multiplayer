@@ -1155,7 +1155,7 @@ export default class Renderer {
 		this.camera.update(this.canvas);
 
 		// update shadows
-		if (!input.keyDown("c")) {
+		if (input.keyDown("c")) {
 			this.updateShadows();
 		}
 
