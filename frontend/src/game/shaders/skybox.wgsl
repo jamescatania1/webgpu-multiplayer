@@ -1,3 +1,6 @@
+override gamma: f32 = 2.2;
+override gamma_offset: f32 = 0.0;
+
 @group(0) @binding(0) var<uniform> u_rot_proj_matrix: mat4x4<f32>;
 
 @group(1) @binding(0) var u_skybox: texture_cube<f32>;
@@ -29,11 +32,10 @@ fn vs(in: VertexIn) -> VertexOut {
 @fragment 
 fn fs(in: VertexOut) -> FragmentOut {
     var sky: vec3<f32> = textureSample(u_skybox, u_skybox_sampler, in.uv).rgb;
-    sky = pow(sky, vec3<f32>(1.0 / 2.2));
+    sky = pow(sky, vec3<f32>(1.0 / (gamma + gamma_offset)));
 
     var out: FragmentOut;
     out.color = vec4<f32>(sky, 1.0);
-    // out.color = vec4<f32>(in.pos.z / in.pos.w);
     out.occlusion = vec4<f32>(1.0);
     return out;
 }

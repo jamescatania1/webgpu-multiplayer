@@ -159,35 +159,6 @@ export async function loadBOBJ(device: GPUDevice, url: string): Promise<ModelDat
 						hasUV: hasUV,
 						hasNormal: hasNormal,
 					});
-
-					// let stride = hasUV && hasNormal ? 16 : hasUV || hasNormal ? 12 : 8;
-					// gl.vertexAttribIPointer(shader.attributes.vertex_xyzc, 2, gl.UNSIGNED_INT, stride, 0);
-					// gl.enableVertexAttribArray(shader.attributes.vertex_xyzc);
-
-					// if (hasNormal) {
-					// 	gl.vertexAttribIPointer(shader.attributes.vertex_normal, 1, gl.UNSIGNED_INT, stride, 8);
-					// 	gl.enableVertexAttribArray(shader.attributes.vertex_normal);
-					// } else {
-					// 	gl.disableVertexAttribArray(shader.attributes.vertex_normal);
-					// }
-					// if (hasUV) {
-					// 	const offset = hasNormal ? 12 : 8;
-					// 	gl.vertexAttribIPointer(shader.attributes.vertex_uv, 1, gl.UNSIGNED_INT, stride, offset);
-					// 	gl.enableVertexAttribArray(shader.attributes.vertex_uv);
-					// } else {
-					// 	gl.disableVertexAttribArray(shader.attributes.vertex_uv);
-					// }
-
-					// // depth vao
-					// const depthVAO = gl.createVertexArray();
-					// gl.bindVertexArray(depthVAO);
-					// const depthVertexBuffer = gl.createBuffer();
-					// gl.bindBuffer(gl.ARRAY_BUFFER, depthVertexBuffer);
-					// gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-					// gl.vertexAttribIPointer(depthShader.attributes.vertex_xyzc, 2, gl.UNSIGNED_INT, stride, 0);
-					// gl.enableVertexAttribArray(depthShader.attributes.vertex_xyzc);
-					// gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-					// gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 				})
 				.catch((err) => {
 					reject(`Error loading file ${url}, ${err}`);

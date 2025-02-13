@@ -151,26 +151,6 @@ export default class Camera {
 			// 	far,
 			// 	this.cascadeMatrices[c].proj,
 			// );
-
-			// stabilize the cascade matrices
-			// mat4.mul(this.cascadeMatrices[c].proj, this.cascadeMatrices[c].view, this.shadowProjMatrix);
-			// vec4.set(0, 0, 0, 1, this.shadowOrigin);
-			// vec4.transformMat4(this.shadowOrigin, this.shadowProjMatrix, this.shadowOrigin);
-			// const w = this.shadowOrigin[3];
-			// vec4.mulScalar(this.shadowOrigin, SHADOW_SETTINGS.resolution / 2.0, this.shadowOrigin);
-
-			// vec4.set(
-			// 	Math.round(this.shadowOrigin[0]),
-			// 	Math.round(this.shadowOrigin[1]),
-			// 	Math.round(this.shadowOrigin[2]),
-			// 	Math.round(this.shadowOrigin[3]),
-			// 	this.roundedOrigin,
-			// );
-			// vec4.sub(this.shadowOrigin, this.roundedOrigin, this.roundedOffset);
-			// vec4.mulScalar(this.roundedOffset, 2.0 / SHADOW_SETTINGS.resolution, this.roundedOffset);
-			// this.cascadeMatrices[c].proj[12] += this.roundedOffset[0];
-			// this.cascadeMatrices[c].proj[13] += this.roundedOffset[1];
-			// this.cascadeMatrices[c].proj[14] += this.roundedOffset[2];
 			
 	
 			vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);
@@ -197,13 +177,25 @@ export default class Camera {
 				this.cascadeMatrices[c].proj,
 			);
 
-			// // stabilize the cascade matrices
-			// const diameter = vec3.distance(this.corners[0], this.corners[7]) / 2.0;
-			// const meterTexels = diameter / SHADOW_SETTINGS.resolution;
+			// stabilize the cascade matrices
+			mat4.mul(this.cascadeMatrices[c].proj, this.cascadeMatrices[c].view, this.shadowProjMatrix);
+			vec4.set(0, 0, 0, 1, this.shadowOrigin);
+			vec4.transformMat4(this.shadowOrigin, this.shadowProjMatrix, this.shadowOrigin);
+			const w = this.shadowOrigin[3];
+			vec4.mulScalar(this.shadowOrigin, SHADOW_SETTINGS.resolution / 2.0, this.shadowOrigin);
 
-			// const shadowOrigin = vec4.fromValues(0, 0, 0, 1);
-			// vec4.transformMat4(shadowOrigin, this.shadowProjMatrix, shadowOrigin);
-			// vec4.divScalar(shadowOrigin, meterTexels, shadowOrigin);
+			vec4.set(
+				Math.round(this.shadowOrigin[0]),
+				Math.round(this.shadowOrigin[1]),
+				Math.round(this.shadowOrigin[2]),
+				Math.round(this.shadowOrigin[3]),
+				this.roundedOrigin,
+			);
+			vec4.sub(this.shadowOrigin, this.roundedOrigin, this.roundedOffset);
+			vec4.mulScalar(this.roundedOffset, 2.0 / SHADOW_SETTINGS.resolution, this.roundedOffset);
+			this.cascadeMatrices[c].proj[12] += this.roundedOffset[0];
+			this.cascadeMatrices[c].proj[13] += this.roundedOffset[1];
+			this.cascadeMatrices[c].proj[14] += this.roundedOffset[2];
 		}
 	}
 }

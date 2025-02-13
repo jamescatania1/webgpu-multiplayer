@@ -6,7 +6,11 @@ override ssao_fade_start: f32;
 override ssao_fade_end: f32;
 override near: f32;
 override far: f32;
-// override shadow_cascades: i32;
+override debug_cascades: bool;
+override shadow_fade_distance: f32;
+override fog_start: f32;
+override fog_end: f32;
+override fog_mip_level: f32;
 
 struct CameraData {
     view_matrix: mat4x4<f32>,
@@ -39,9 +43,9 @@ struct TransformData {
 @group(1) @binding(0) var<uniform> u_transform: TransformData;
 
 @group(2) @binding(0) var u_depth_sampler: sampler;
-@group(2) @binding(1) var u_depth: texture_2d<f32>;
-@group(2) @binding(2) var u_shadowmap: texture_depth_2d_array;
-@group(2) @binding(3) var<uniform> u_screen_size: vec2<f32>;
+@group(2) @binding(1) var u_shadowmap: texture_depth_2d_array;
+@group(2) @binding(2) var<uniform> u_screen_size: vec2<f32>;
+@group(2) @binding(3) var u_depth: texture_2d<f32>;
 
 @group(3) @binding(0) var u_ssao_noise_sampler: sampler;
 @group(3) @binding(1) var u_ssao_noise: texture_2d<f32>;
@@ -135,7 +139,6 @@ fn vs(in: VertexIn) -> VertexOut {
 // bias the shadowmap sample based on the world normals
 // https://web.archive.org/web/20180524211931/https://www.dissidentlogic.com/old/images/NormalOffsetShadows/GDC_Poster_NormalOffset.png
 fn shadow_clip_pos(cascade: i32, n: vec3<f32>, cos_lo: f32, world_pos: vec4<f32>) -> vec4<f32> {
-    // let offset_normal_scale: f32 = u_shadow[cascade].normal_bias / 2048.0;
     let offset_normal_scale: f32 = saturate(1.0 - cos_lo) * u_shadow[cascade].normal_bias;
     let shadow_offset = vec4<f32>(n * offset_normal_scale, 0.0);
     let shadow_clip_pos: vec4<f32> = u_shadow[cascade].proj_matrix * (u_shadow[cascade].view_matrix * world_pos);
@@ -143,41 +146,41 @@ fn shadow_clip_pos(cascade: i32, n: vec3<f32>, cos_lo: f32, world_pos: vec4<f32>
     return vec4<f32>(shadow_uv_offset_pos.xy, shadow_clip_pos.zw);
 }
 
-// fn ssao(view_pos: vec3<f32>, view_normal: vec3<f32>, sample_location: vec2<f32>, clip_z: f32) -> f32 {
-//     var v_n = normalize(view_normal);
-//     var random_vec: vec3<f32> = normalize(textureSample(u_ssao_noise, u_ssao_noise_sampler, sample_location * ssao_noise_scale).xyz);
-//     var tangent: vec3<f32> = normalize(random_vec - v_n * dot(random_vec, v_n));
-//     var bitangent: vec3<f32> = cross(v_n, tangent);
-//     var tbn: mat3x3<f32> = mat3x3<f32>(tangent, bitangent, v_n);
-//     var occlusion: f32 = 0.0;
-//     for (var i: i32 = 0; i < ssao_samples; i++) {
-//         var sample_pos: vec3<f32> = tbn * u_ssao.kernel[i];
-//         sample_pos = sample_pos * ssao_radius + view_pos;
+fn ssao(view_pos: vec3<f32>, view_normal: vec3<f32>, sample_location: vec2<f32>, clip_z: f32) -> f32 {
+    var v_n = normalize(view_normal);
+    var random_vec: vec3<f32> = normalize(textureSample(u_ssao_noise, u_ssao_noise_sampler, sample_location * ssao_noise_scale).xyz);
+    var tangent: vec3<f32> = normalize(random_vec - v_n * dot(random_vec, v_n));
+    var bitangent: vec3<f32> = cross(v_n, tangent);
+    var tbn: mat3x3<f32> = mat3x3<f32>(tangent, bitangent, v_n);
+    var occlusion: f32 = 0.0;
+    for (var i: i32 = 0; i < ssao_samples; i++) {
+        var sample_pos: vec3<f32> = tbn * u_ssao.kernel[i];
+        sample_pos = sample_pos * ssao_radius + view_pos;
         
-//         var offset: vec4<f32> = vec4<f32>(sample_pos, 1.0);
-//         offset = u_global.proj_matrix * offset;
-//         offset = offset / offset.w;
-//         offset = offset * 0.5 + 0.5;
-//         offset.y = 1.0 - offset.y;
+        var offset: vec4<f32> = vec4<f32>(sample_pos, 1.0);
+        offset = u_global.proj_matrix * offset;
+        offset = offset / offset.w;
+        offset = offset * 0.5 + 0.5;
+        offset.y = 1.0 - offset.y;
 
-//         var sample_depth: f32 = textureSample(u_depth, u_depth_sampler, offset.xy).r;
-//         var range_check: f32 = smoothstep(0.0, 1.0, ssao_radius / abs(view_pos.z - sample_depth));
-//         let d_z = sample_depth - sample_pos.z;
-//         if (d_z > ssao_bias && d_z < ssao_radius) {
-//             occlusion += 1.0;
-//         }
-//     }
-//     occlusion /= f32(ssao_samples);
+        var sample_depth: f32 = textureSample(u_depth, u_depth_sampler, offset.xy).r;
+        var range_check: f32 = smoothstep(0.0, 1.0, ssao_radius / abs(view_pos.z - sample_depth));
+        let d_z = sample_depth - sample_pos.z;
+        if (d_z > ssao_bias && d_z < ssao_radius) {
+            occlusion += 1.0;
+        }
+    }
+    occlusion /= f32(ssao_samples);
     
-//     // fades out occlusion at further distances
-//     let depth_linear: f32 = (2.0 * near) / (far + near - (clip_z * 2.0 - 1.0) * (far - near));
-//     let occlusion_fade: f32 = 1.0 - clamp((depth_linear * (far - near) - ssao_fade_start) / (ssao_fade_end - ssao_fade_start), 0.0, 1.0);
-//     occlusion = clamp(1.0 - occlusion_fade * occlusion, 0.0, 1.0);
+    // fades out occlusion at further distances
+    let depth_linear: f32 = (2.0 * near) / (far + near - (clip_z * 2.0 - 1.0) * (far - near));
+    let occlusion_fade: f32 = 1.0 - clamp((depth_linear * (far - near) - ssao_fade_start) / (ssao_fade_end - ssao_fade_start), 0.0, 1.0);
+    occlusion = clamp(1.0 - occlusion_fade * occlusion, 0.0, 1.0);
 
-//     return occlusion;
-// }
+    return occlusion;
+}
 
-const sun_size: f32 = 2.0;
+const sun_size: f32 = 4.0;
 
 fn shadow_blocker_distance(cascade_index: i32, shadow_pos: vec3<f32>, hash: f32) -> f32 {
     let frag_depth = shadow_pos.z;
@@ -188,7 +191,7 @@ fn shadow_blocker_distance(cascade_index: i32, shadow_pos: vec3<f32>, hash: f32)
 
     let texel_size: vec2<f32> = vec2<f32>(1.0) / vec2<f32>(textureDimensions(u_shadowmap).xy);
     var search_radius: f32 = sun_size * (frag_depth - near) / frag_depth;
-    search_radius = 15.0;
+    search_radius = 10.0;
     let samples: i32 = i32(u_shadow[cascade_index].blocker_samples);
 
     var blocker_count: i32 = 0;
@@ -223,13 +226,13 @@ fn shadow(cascade_index: i32, shadow_pos: vec3<f32>, world_pos: vec3<f32>) -> f3
     let frag_depth: f32 = shadow_pos.z;
     let shadowmap_pos: vec2<f32> = shadow_pos.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
     let samples: i32 = i32(u_shadow[cascade_index].samples);
-    let penumbra_width: f32 = clamp(sun_size * (frag_depth - blocker_distance) / blocker_distance, 0.02, 0.2);
+    let penumbra_width: f32 = clamp(sun_size * (frag_depth - blocker_distance) / blocker_distance, 0.05, 10.2);
 
     var res: f32 = 0.0;
     for (var i: i32 = 0; i < samples; i++) {
         let r_theta: vec2<f32> = u_shadowmap_kernel[i].xy + vec2<f32>(0.0, hash * 1.0);
         let sample_offset: vec2<f32> = vec2<f32>(cos(r_theta.y), sin(r_theta.y)) * r_theta.x * penumbra_width;
-        let sample_pos: vec2<f32> = shadowmap_pos + sample_offset * texel_size * 150.0;
+        let sample_pos: vec2<f32> = shadowmap_pos + sample_offset * texel_size * 100.0;
         res += 1.0 - textureSampleCompareLevel(
             u_shadowmap, 
             u_shadowmap_sampler_comparison,
@@ -241,10 +244,47 @@ fn shadow(cascade_index: i32, shadow_pos: vec3<f32>, world_pos: vec3<f32>) -> f3
     return res / f32(samples);
 }
 
+fn visualize_cascades(in: VertexOut) -> vec3<f32> {
+    let view_depth = abs(in.view_pos.z);
+    var cascade_index: i32 = 0;
+    var shadow_pos: vec3<f32> = vec3<f32>(0.0);
+    if (view_depth < u_shadow[0].far) {
+        cascade_index = 0;
+        shadow_pos = in.shadow_clip_pos_0.xyz / in.shadow_clip_pos_0.w;
+    }
+    else if (view_depth < u_shadow[1].far) {
+        cascade_index = 1;
+        shadow_pos = in.shadow_clip_pos_1.xyz / in.shadow_clip_pos_1.w;
+    }
+    else if (view_depth < u_shadow[2].far) {
+        cascade_index = 2;
+        shadow_pos = in.shadow_clip_pos_2.xyz / in.shadow_clip_pos_2.w;
+    }
+    else {
+        return vec3<f32>(0.0);
+    }
+    let shadowmap_pos = shadow_pos.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+    if (shadowmap_pos.x < 0.0 || shadowmap_pos.x > 1.0 || shadowmap_pos.y < 0.0 || shadowmap_pos.y > 1.0 || shadow_pos.z > 1.0) {
+        return vec3<f32>(0.0);
+    }
+    if (cascade_index == 0) {
+        return vec3<f32>(1.0, 0.0, 0.0);
+    }
+    else if (cascade_index == 1) {
+        return vec3<f32>(0.0, 1.0, 0.0);
+    }
+    else {
+        if (distance(in.world_pos, u_global.camera_position) > u_shadow[2].far) {
+            return vec3<f32>(1.0, 1.0, 0.0);
+        }
+        return vec3<f32>(0.0, 0.0, 1.0);
+    }
+}
+
 @fragment 
 fn fs(in: VertexOut) -> FragmentOut {
     let n = normalize(in.normal);
-    let rough: f32 = 0.91;
+    let rough: f32 = 1.0;
     let metal: f32 = 0.0;
     let albedo: vec3<f32> = in.color;
 
@@ -293,7 +333,11 @@ fn fs(in: VertexOut) -> FragmentOut {
         }
     }
     else if (view_depth < u_shadow[2].far) {
-        shadow_factor = shadow(2, in.shadow_clip_pos_2.xyz / in.shadow_clip_pos_2.w, in.world_pos);
+        let cam_distance: f32 = distance(in.world_pos, u_global.camera_position);
+        if (cam_distance < u_shadow[2].far) {
+            shadow_factor = shadow(2, in.shadow_clip_pos_2.xyz / in.shadow_clip_pos_2.w, in.world_pos);
+            shadow_factor *= saturate((u_shadow[2].far - cam_distance) / shadow_fade_distance);
+        }
     }
 
     light += directional * (1.0 - shadow_factor);
@@ -312,33 +356,28 @@ fn fs(in: VertexOut) -> FragmentOut {
     }
 
     // SSAO
-    // let occlusion = ssao(in.view_pos.xyz, in.view_normal, in.vertex_pos_hash, in.pos.z);
-    // light += occlusion * ambient * 0.7;
+    let occlusion = ssao(in.view_pos.xyz, in.view_normal, in.vertex_pos_hash, in.pos.z);
+    light += occlusion * ambient;
 
-    light += ambient * 0.7;
+    // light += ambient * 1.0;
 
     var color: vec3<f32> = light;
 
-    // var cascade_index: i32 = 0;
-    // if (view_depth < u_shadow[0].far) {
-    //     cascade_index = 0;
-    // }
-    // else if (view_depth < u_shadow[1].far) {
-    //     cascade_index = 1;
-    // }
-    // else if (view_depth < u_shadow[2].far) {
-    //     cascade_index = 2;
-    // }
-    // if (cascade_index == 0) {
-    //     color = mix(color, vec3<f32>(1.0, 0.0, 0.0), 0.1);
-    // }
-    // else if (cascade_index == 1) {
-    //     color = mix(color, vec3<f32>(0.0, 1.0, 0.0), 0.1);
-    // }
-    // else if (cascade_index == 2) {
-    //     color = mix(color, vec3<f32>(0.0, 0.0, 1.0), 0.1);
-    // }
-    
+    // fog
+    let fog_factor: f32 = saturate((view_depth - fog_start) / (fog_end - fog_start));
+    let fog_mip: f32 = max(1.0, fog_mip_level * (1.0 - fog_factor));
+    var fog_sky_color = textureSampleLevel(
+        u_prefilter, 
+        u_scene_sampler, 
+        normalize(in.world_pos - u_global.camera_position), 
+        fog_mip
+    ).rgb;
+    fog_sky_color = pow(fog_sky_color, vec3<f32>(1.0 / 2.2));
+    color = mix(color, fog_sky_color, fog_factor) * 0.0001 + color;
+
+    if (debug_cascades) {
+        color = mix(color, visualize_cascades(in), 0.75);
+    }
 
     var out: FragmentOut;
     out.color = vec4<f32>(color, 1.0);

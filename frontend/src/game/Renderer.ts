@@ -14,7 +14,7 @@ const MOUSE_SENSITIVITY = 2.0;
 export const DEBUG_GRAPHICS_TIME = true;
 export const SSAO_SETTINGS = {
 	sampleCount: 32,
-	radius: 0.4,
+	radius: 1.4,
 	bias: 0.05,
 	kernelDotCutOff: 0.025,
 	noiseTextureSize: 32,
@@ -23,8 +23,10 @@ export const SSAO_SETTINGS = {
 	fadeEnd: 105.0,
 };
 export const SHADOW_SETTINGS = {
+	debugCascades: false,
 	resolution: 2048,
 	kernelSize: 64,
+	fadeDistance: 10.0,
 	cascades: [
 		{
 			depthScale: 300.0,
@@ -33,7 +35,7 @@ export const SHADOW_SETTINGS = {
 			bias: 0.0001,
 			normalBias: 0.1,
 			samples: 48,
-			blockerSamples: 16,
+			blockerSamples: 48,
 		},
 		{
 			depthScale: 300.0,
@@ -48,10 +50,10 @@ export const SHADOW_SETTINGS = {
 			depthScale: 300.0,
 			near: 25.0,
 			far: 100.0,
-			bias: 0.0001,
-			normalBias: 0.15,
-			samples: 8,
-			blockerSamples: 4,
+			bias: 0.00025,
+			normalBias: 0.3,
+			samples: 12,
+			blockerSamples: 12,
 		},
 	],
 };
@@ -59,7 +61,7 @@ export const SUN_SETTINGS = {
 	position: vec3.fromValues(20, 50, -17),
 	direction: vec3.normalize(vec3.fromValues(20, 50, -17)),
 	color: vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0)),
-	intensity: 1.5,
+	intensity: 5.7,
 };
 export const SKY_SETTINGS = {
 	skyboxSource: "sky",
@@ -71,14 +73,18 @@ export const SKY_SETTINGS = {
 	prefilterSamples: 2048,
 	brdfResolution: 1024,
 	brdfSamples: 2048,
+	fogStart: 155.0,
+	fogEnd: 255.0,
+	fogMipLevel: 2.0,
+	gammaOffset: 0.2,
 };
 export const POSTFX_SETTINGS = {
-	exposure: 0.4,
+	exposure: 0.275,
 	temperature: 0.2,
 	tint: 0.1,
-	contrast: 1.0,
+	contrast: 1.05,
 	brightness: 0.0,
-	gamma: 2.2,
+	gamma: 2.0,
 };
 
 export default class Renderer {
@@ -201,15 +207,12 @@ export default class Renderer {
 				{
 					binding: 0,
 					visibility: GPUShaderStage.FRAGMENT,
-					sampler: {},
+					sampler: {
+						type: "non-filtering",
+					},
 				},
 				{
 					binding: 1,
-					visibility: GPUShaderStage.FRAGMENT,
-					texture: {},
-				},
-				{
-					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
 					texture: {
 						viewDimension: "2d-array",
@@ -218,10 +221,19 @@ export default class Renderer {
 				},
 				{
 					// screen size, can move elsewhere later
-					binding: 3,
+					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
 					buffer: {},
 				},
+				{
+					binding: 3,
+					visibility: GPUShaderStage.FRAGMENT,
+					texture: {
+						viewDimension: "2d",
+						sampleType: "float",
+						multisampled: false,
+					}
+				}
 			],
 		});
 		const sceneBindGroupLayout = this.device.createBindGroupLayout({
@@ -338,7 +350,12 @@ export default class Renderer {
 			fragment: {
 				module: this.shaders.depth,
 				entryPoint: "fs",
-				targets: [{ format: "r16float", writeMask: GPUColorWrite.RED }],
+				targets: [
+					{
+						format: "r16float",
+						writeMask: GPUColorWrite.RED,
+					}
+				],
 			},
 			primitive: {
 				topology: "triangle-list",
@@ -346,7 +363,7 @@ export default class Renderer {
 			},
 			depthStencil: {
 				depthWriteEnabled: true,
-				depthCompare: "less-equal",
+				depthCompare: "less",
 				format: "depth32float",
 			},
 			multisample: {
@@ -443,14 +460,19 @@ export default class Renderer {
 				entryPoint: "fs",
 				targets: [{ format: "rgba16float" }, { format: "r16float" }],
 				constants: {
-					// ssao_samples: SSAO_SETTINGS.sampleCount,
-					// ssao_radius: SSAO_SETTINGS.radius,
-					// ssao_bias: SSAO_SETTINGS.bias,
-					// ssao_noise_scale: SSAO_SETTINGS.noiseScale,
-					// ssao_fade_start: SSAO_SETTINGS.fadeStart,
-					// ssao_fade_end: SSAO_SETTINGS.fadeEnd,
+					ssao_samples: SSAO_SETTINGS.sampleCount,
+					ssao_radius: SSAO_SETTINGS.radius,
+					ssao_bias: SSAO_SETTINGS.bias,
+					ssao_noise_scale: SSAO_SETTINGS.noiseScale,
+					ssao_fade_start: SSAO_SETTINGS.fadeStart,
+					ssao_fade_end: SSAO_SETTINGS.fadeEnd,
 					near: this.camera.near,
-					// far: this.camera.far,
+					far: this.camera.far,
+					debug_cascades: SHADOW_SETTINGS.debugCascades ? 1 : 0,
+					shadow_fade_distance: SHADOW_SETTINGS.fadeDistance,
+					fog_start: SKY_SETTINGS.fogStart,
+					fog_end: SKY_SETTINGS.fogEnd,
+					fog_mip_level: SKY_SETTINGS.fogMipLevel,
 				},
 			},
 			primitive: {
@@ -634,6 +656,8 @@ export default class Renderer {
 		loadBOBJ(this.device, "/scene.bobj").then((data) => {
 			const model = new Model(this.device, this.camera, transformBindGroupLayout, data);
 			model.transform.rotation[1] = Math.PI;
+			model.metallic = 1.0;
+			model.roughness = 0.0;
 			model.update(this.device, this.camera);
 			this.objects.push(model);
 		});
@@ -701,25 +725,21 @@ export default class Renderer {
 		});
 		const depthView = depthTexture.createView();
 
-		// the depth texture drawn to by the depth pass
 		const depthDrawTexture = this.device.createTexture({
-			label: "draw depth texture",
+			label: "depth draw texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 4,
 			format: "r16float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
-		const depthDrawView = depthDrawTexture.createView();
 
-		// resolve depth texture to be able to sample in ssao
 		const depthResolveTexture = this.device.createTexture({
-			label: "resolve depth draw texture",
+			label: "depth resolve texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 1,
 			format: "r16float",
-			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
-		});
-		const depthResolveView = depthResolveTexture.createView();
+			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+		})
 
 		// scene draw color texture
 		const sceneDrawTexture = this.device.createTexture({
@@ -787,30 +807,30 @@ export default class Renderer {
 				{
 					binding: 0,
 					resource: this.device.createSampler({
-						magFilter: "linear",
-						minFilter: "linear",
+						minFilter: "nearest",
+						magFilter: "nearest",
 						addressModeU: "clamp-to-edge",
 						addressModeV: "clamp-to-edge",
 					}),
 				},
 				{
 					binding: 1,
-					resource: depthResolveView,
-				},
-				{
-					binding: 2,
 					resource: this.shadowData.texture.createView({
 						dimension: "2d-array",
 					}),
 				},
 				{
-					binding: 3,
+					binding: 2,
 					resource: {
 						buffer: depthUniformScreenSizeBuffer,
 						offset: 0,
 						size: 2 * 4,
 					},
 				},
+				{
+					binding: 3,
+					resource: depthResolveTexture.createView(),
+				}
 			],
 		});
 
@@ -831,21 +851,19 @@ export default class Renderer {
 		});
 
 		// update render pass descriptor textures
-		(this.renderPassDescriptors.depthPass as any).colorAttachments = [
-			{
-				clearValue: [0.0, 0.0, 0.0, 0.0],
-				loadOp: "clear",
-				storeOp: "store",
-				view: depthDrawView,
-				resolveTarget: depthResolveView,
-			},
-		];
 		(this.renderPassDescriptors.depthPass as any).depthStencilAttachment = {
 			view: depthView,
 			depthClearValue: 1.0,
 			depthLoadOp: "clear",
 			depthStoreOp: "store",
 		};
+		(this.renderPassDescriptors.depthPass as any).colorAttachments = [{
+			clearValue: [0.0, 0.0, 0.0, 1.0],
+			loadOp: "clear",
+			storeOp: "store",
+			view: depthDrawTexture.createView(),
+			resolveTarget: depthResolveTexture.createView(),
+		}];
 
 		(this.renderPassDescriptors.sceneDraw as any).colorAttachments = [
 			{
@@ -1014,6 +1032,7 @@ export default class Renderer {
 		const sceneSampler = this.device.createSampler({
 			minFilter: "linear",
 			magFilter: "linear",
+			mipmapFilter: "linear",
 			addressModeU: "clamp-to-edge",
 			addressModeV: "clamp-to-edge",
 			addressModeW: "clamp-to-edge",

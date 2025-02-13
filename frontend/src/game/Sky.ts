@@ -2,7 +2,7 @@ import { mat4, vec3 } from "wgpu-matrix";
 import HDRjs from "./utils/hdr";
 import loadHDR from "./utils/hdr";
 import type { Shaders } from "./Shaders";
-import Renderer, { SKY_SETTINGS } from "./Renderer";
+import Renderer, { POSTFX_SETTINGS, SKY_SETTINGS } from "./Renderer";
 
 // export type PointLight = {
 // 	position: vec3;
@@ -335,6 +335,10 @@ export default class Sky {
 				module: shaders.skybox,
 				entryPoint: "fs",
 				targets: [{ format: "rgba16float" }, { format: "r16float" }],
+				constants: {
+					gamma: POSTFX_SETTINGS.gamma,
+					gamma_offset: SKY_SETTINGS.gammaOffset,
+				}
 			},
 			primitive: {
 				topology: "triangle-list",
