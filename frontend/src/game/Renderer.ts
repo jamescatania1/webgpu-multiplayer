@@ -230,8 +230,8 @@ export default class Renderer {
 					visibility: GPUShaderStage.FRAGMENT,
 					texture: {
 						viewDimension: "2d",
-						sampleType: "float",
-						multisampled: false,
+						multisampled: true,
+						sampleType: "depth",
 					}
 				}
 			],
@@ -721,7 +721,7 @@ export default class Renderer {
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 4,
 			format: "depth32float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
 		const depthView = depthTexture.createView();
 
@@ -738,7 +738,7 @@ export default class Renderer {
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 1,
 			format: "r16float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		})
 
 		// scene draw color texture
@@ -829,7 +829,11 @@ export default class Renderer {
 				},
 				{
 					binding: 3,
-					resource: depthResolveTexture.createView(),
+					resource: depthTexture.createView(
+						{
+							"usage": GPUTextureUsage.TEXTURE_BINDING,
+						}
+					),
 				}
 			],
 		});
@@ -852,7 +856,9 @@ export default class Renderer {
 
 		// update render pass descriptor textures
 		(this.renderPassDescriptors.depthPass as any).depthStencilAttachment = {
-			view: depthView,
+			view: depthTexture.createView({
+				usage: GPUTextureUsage.RENDER_ATTACHMENT,
+			}),
 			depthClearValue: 1.0,
 			depthLoadOp: "clear",
 			depthStoreOp: "store",
@@ -882,9 +888,11 @@ export default class Renderer {
 			},
 		];
 		(this.renderPassDescriptors.sceneDraw as any).depthStencilAttachment = {
-			view: depthView,
-			depthLoadOp: "load",
-			depthStoreOp: "discard",
+			view: depthTexture.createView({
+				usage: GPUTextureUsage.RENDER_ATTACHMENT,
+	
+			}),
+			depthReadOnly: true,
 		};
 
 		(this.renderPassDescriptors.postFX as any).colorAttachments = [

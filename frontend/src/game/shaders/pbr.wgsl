@@ -45,7 +45,7 @@ struct TransformData {
 @group(2) @binding(0) var u_depth_sampler: sampler;
 @group(2) @binding(1) var u_shadowmap: texture_depth_2d_array;
 @group(2) @binding(2) var<uniform> u_screen_size: vec2<f32>;
-@group(2) @binding(3) var u_depth: texture_2d<f32>;
+@group(2) @binding(3) var u_depth: texture_depth_multisampled_2d;
 
 @group(3) @binding(0) var u_ssao_noise_sampler: sampler;
 @group(3) @binding(1) var u_ssao_noise: texture_2d<f32>;
@@ -153,6 +153,7 @@ fn ssao(view_pos: vec3<f32>, view_normal: vec3<f32>, sample_location: vec2<f32>,
     var bitangent: vec3<f32> = cross(v_n, tangent);
     var tbn: mat3x3<f32> = mat3x3<f32>(tangent, bitangent, v_n);
     var occlusion: f32 = 0.0;
+    let depth_dimensions: vec2<f32> = vec2<f32>(textureDimensions(u_depth).xy);
     for (var i: i32 = 0; i < ssao_samples; i++) {
         var sample_pos: vec3<f32> = tbn * u_ssao.kernel[i];
         sample_pos = sample_pos * ssao_radius + view_pos;
@@ -163,7 +164,8 @@ fn ssao(view_pos: vec3<f32>, view_normal: vec3<f32>, sample_location: vec2<f32>,
         offset = offset * 0.5 + 0.5;
         offset.y = 1.0 - offset.y;
 
-        var sample_depth: f32 = textureSample(u_depth, u_depth_sampler, offset.xy).r;
+        let pixel_coords: vec2<i32> = vec2<i32>(offset.xy * depth_dimensions);
+        var sample_depth: f32 = textureLoad(u_depth, pixel_coords, 0);
         var range_check: f32 = smoothstep(0.0, 1.0, ssao_radius / abs(view_pos.z - sample_depth));
         let d_z = sample_depth - sample_pos.z;
         if (d_z > ssao_bias && d_z < ssao_radius) {
@@ -361,7 +363,7 @@ fn fs(in: VertexOut) -> FragmentOut {
 
     // light += ambient * 1.0;
 
-    var color: vec3<f32> = light;
+    var color: vec3<f32> = light * 0.0001 + occlusion;
 
     // fog
     let fog_factor: f32 = saturate((view_depth - fog_start) / (fog_end - fog_start));
