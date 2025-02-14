@@ -3,6 +3,7 @@ import { default as PBRShaderSource } from "./shaders/pbr.wgsl";
 import { default as depthShaderSource } from "./shaders/depth.wgsl";
 import { default as shadowShaderSource } from "./shaders/shadows.wgsl";
 import { default as skyboxShaderSource } from "./shaders/skybox.wgsl";
+import { default as ssaoShaderSource } from "./shaders/ssao.wgsl";
 import { default as postFXShaderSource } from "./shaders/post_fx.wgsl";
 import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
 import { default as irradianceGeneratorSource } from "./shaders/irradiance_gen.wgsl";
@@ -16,6 +17,7 @@ export type Shaders = {
 	depth: GPUShaderModule;
 	shadows: GPUShaderModule;
 	skybox: GPUShaderModule;
+	ssao: GPUShaderModule;
 	postFX: GPUShaderModule;
 	cubemapGenerator: GPUShaderModule;
 	irradianceGenerator: GPUShaderModule;
@@ -58,6 +60,13 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "skybox draw shader",
 		code: skyboxShaderSource,
 	});
+	const ssao = loadShader(device, {
+		label: "ssao shader",
+		code: ssaoShaderSource,
+		templates: {
+			"ssao_samples": Math.round(SSAO_SETTINGS.sampleCount).toString(),
+		},
+	});
 	const postFX = loadShader(device, {
 		label: "post processing shader",
 		code: postFXShaderSource,
@@ -85,6 +94,7 @@ export function loadShaders(device: GPUDevice): Shaders {
 		depth: depth,
 		shadows: shadows,
 		skybox: skybox,
+		ssao: ssao,
 		postFX: postFX,
 		cubemapGenerator: cubemapGenerator,
 		irradianceGenerator: irradianceGenerator,

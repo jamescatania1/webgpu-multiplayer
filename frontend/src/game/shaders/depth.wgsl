@@ -20,8 +20,8 @@ struct VertexIn {
 }
 
 struct VertexOut {
-    @builtin(position) pos: vec4f,
-    @location(0) view_pos: vec4f,
+    @builtin(position) pos: vec4<f32>,
+    @location(0) view_pos: vec4<f32>,
 };
 
 @vertex 
@@ -29,9 +29,9 @@ fn vs(in: VertexIn) -> VertexOut {
     let x: f32 = f32(in.vertex_xyzc.x >> 16u) / 65535.0 - 0.5;
     let y: f32 = f32(in.vertex_xyzc.x & 0xFFFFu) / 65535.0 - 0.5;
     let z: f32 = f32(in.vertex_xyzc.y >> 16u) / 65535.0 - 0.5;
-    let world_pos: vec4f = u_transform.model_matrix * vec4f(vec3f(x, y, z) * u_transform.model_scale + u_transform.model_offset, 1.0);
-    let view_pos: vec4f = u_global.view_matrix * world_pos;
-    let clip_pos: vec4f = u_global.proj_matrix * view_pos;
+    let world_pos: vec4<f32> = u_transform.model_matrix * vec4<f32>(vec3<f32>(x, y, z) * u_transform.model_scale + u_transform.model_offset, 1.0);
+    let view_pos: vec4<f32> = u_global.view_matrix * world_pos;
+    let clip_pos: vec4<f32> = u_global.proj_matrix * view_pos;
 
     var out: VertexOut;
     out.pos = clip_pos;
@@ -39,11 +39,9 @@ fn vs(in: VertexIn) -> VertexOut {
     return out;
 }
 
-fn linearize_depth(depth: f32) -> f32 {
-    return (2.0 * far * near) / (far + near - (depth * 2.0 - 1.0) * (far - near));
-}
-
 @fragment 
-fn fs(in: VertexOut) -> @location(0) f32 {
-    return in.view_pos.z;
+fn fs(in: VertexOut) -> @location(0) vec4<f32> {
+    let screen_pos: vec3<f32> = in.view_pos.xyz / in.view_pos.w;
+    let view_normal = cross(dpdyFine(screen_pos), dpdxFine(screen_pos));
+    return vec4<f32>(normalize(view_normal * vec3<f32>(1.0, -1.0, -1.0)), 1.0);
 }

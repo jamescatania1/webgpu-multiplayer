@@ -14,8 +14,8 @@ const MOUSE_SENSITIVITY = 2.0;
 export const DEBUG_GRAPHICS_TIME = true;
 export const SSAO_SETTINGS = {
 	sampleCount: 32,
-	radius: 1.4,
-	bias: 0.05,
+	radius: 0.175,
+	bias: 0.285,
 	kernelDotCutOff: 0.025,
 	noiseTextureSize: 32,
 	noiseScale: 1000.0,
@@ -61,7 +61,7 @@ export const SUN_SETTINGS = {
 	position: vec3.fromValues(20, 50, -17),
 	direction: vec3.normalize(vec3.fromValues(20, 50, -17)),
 	color: vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0)),
-	intensity: 5.7,
+	intensity: 4.25,
 };
 export const SKY_SETTINGS = {
 	skyboxSource: "sky",
@@ -79,7 +79,7 @@ export const SKY_SETTINGS = {
 	gammaOffset: 0.2,
 };
 export const POSTFX_SETTINGS = {
-	exposure: 0.275,
+	exposure: 0.325,
 	temperature: 0.2,
 	tint: 0.1,
 	contrast: 1.05,
@@ -113,12 +113,14 @@ export default class Renderer {
 		shadows: GPUBindGroupLayout;
 		depth: GPUBindGroupLayout;
 		scene: GPUBindGroupLayout;
+		ssao: GPUBindGroupLayout;
 	};
 	private globalUniformBindGroups: {
 		camera: GPUBindGroup | null;
 		shadows: GPUBindGroup[];
 		depth: GPUBindGroup | null;
 		scene: GPUBindGroup | null;
+		ssao: GPUBindGroup | null;
 		drawTexture: GPUBindGroup | null;
 	};
 	private readonly pipelines: {
@@ -126,6 +128,7 @@ export default class Renderer {
 		depth: GPURenderPipeline;
 		shadows: GPURenderPipeline;
 		postFX: GPURenderPipeline;
+		ssao: GPUComputePipeline;
 	};
 	private renderPassDescriptors: {
 		depthPass: GPURenderPassDescriptor;
@@ -181,11 +184,16 @@ export default class Renderer {
 			entries: [
 				{
 					binding: 0,
-					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
 					buffer: {},
 				},
 				{
 					binding: 1,
+					visibility: GPUShaderStage.COMPUTE,
+					buffer: {},
+				},
+				{
+					binding: 2,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: {},
 				},
@@ -230,8 +238,8 @@ export default class Renderer {
 					visibility: GPUShaderStage.FRAGMENT,
 					texture: {
 						viewDimension: "2d",
-						multisampled: true,
-						sampleType: "depth",
+						multisampled: false,
+						sampleType: "float",
 					}
 				}
 			],
@@ -241,12 +249,12 @@ export default class Renderer {
 			entries: [
 				{
 					binding: 0,
-					visibility: GPUShaderStage.FRAGMENT,
+					visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
 					sampler: {},
 				},
 				{
 					binding: 1,
-					visibility: GPUShaderStage.FRAGMENT,
+					visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
 					texture: {},
 				},
 				{
@@ -275,7 +283,7 @@ export default class Renderer {
 				},
 				{
 					binding: 6,
-					visibility: GPUShaderStage.FRAGMENT,
+					visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
 					buffer: {},
 				},
 				{
@@ -304,11 +312,44 @@ export default class Renderer {
 				},
 			],
 		});
+		const ssaoBindGroupLayout = this.device.createBindGroupLayout({
+			label: "ssao bind group layout",
+			entries: [
+				{
+					binding: 0,
+					visibility: GPUShaderStage.COMPUTE,
+					texture: {
+						viewDimension: "2d",
+						multisampled: true,
+						sampleType: "depth",
+					},
+				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.COMPUTE,
+					texture: {
+						viewDimension: "2d",
+						multisampled: true,
+						sampleType: "unfilterable-float",
+					}
+				},
+				{
+					binding: 2,
+					visibility: GPUShaderStage.COMPUTE,
+					storageTexture: {
+						access: "write-only",
+						format: "rgba16float",
+						viewDimension: "2d",
+					}
+				}
+			]
+		});
 		this.globalUniformBindGroupLayouts = {
 			camera: cameraBindGroupLayout,
 			shadows: shadowsBindGroupLayout,
 			depth: depthBindGroupLayout,
 			scene: sceneBindGroupLayout,
+			ssao: ssaoBindGroupLayout,
 		};
 		const transformBindGroupLayout = this.device.createBindGroupLayout({
 			label: "transform bind group layout",
@@ -352,8 +393,7 @@ export default class Renderer {
 				entryPoint: "fs",
 				targets: [
 					{
-						format: "r16float",
-						writeMask: GPUColorWrite.RED,
+						format: "rgba16float",
 					}
 				],
 			},
@@ -458,16 +498,10 @@ export default class Renderer {
 			fragment: {
 				module: this.shaders.PBR,
 				entryPoint: "fs",
-				targets: [{ format: "rgba16float" }, { format: "r16float" }],
+				targets: [{ format: "rgba16float" }],
 				constants: {
-					ssao_samples: SSAO_SETTINGS.sampleCount,
-					ssao_radius: SSAO_SETTINGS.radius,
-					ssao_bias: SSAO_SETTINGS.bias,
-					ssao_noise_scale: SSAO_SETTINGS.noiseScale,
-					ssao_fade_start: SSAO_SETTINGS.fadeStart,
-					ssao_fade_end: SSAO_SETTINGS.fadeEnd,
 					near: this.camera.near,
-					far: this.camera.far,
+					// far: this.camera.far,
 					debug_cascades: SHADOW_SETTINGS.debugCascades ? 1 : 0,
 					shadow_fade_distance: SHADOW_SETTINGS.fadeDistance,
 					fog_start: SKY_SETTINGS.fogStart,
@@ -524,18 +558,43 @@ export default class Renderer {
 				count: 4,
 			},
 		});
+		const ssaoPipelineLayout = this.device.createPipelineLayout({
+			label: "ssao compute pipeline layout",
+			bindGroupLayouts: [
+				this.globalUniformBindGroupLayouts.ssao,
+				this.globalUniformBindGroupLayouts.scene,
+				this.globalUniformBindGroupLayouts.camera,
+			],
+		});
+		const ssaoComputePipeline = this.device.createComputePipeline({
+			label: "irradiance map generator compute pipeline",
+			layout: ssaoPipelineLayout,
+			compute: {
+				module: this.shaders.ssao,
+				entryPoint: "compute_ssao",
+				constants: {
+					ssao_samples: SSAO_SETTINGS.sampleCount,
+					ssao_radius: SSAO_SETTINGS.radius,
+					ssao_bias: SSAO_SETTINGS.bias,
+					ssao_noise_scale: SSAO_SETTINGS.noiseScale,
+					// ssao_fade_start: SSAO_SETTINGS.fadeStart,
+					// ssao_fade_end: SSAO_SETTINGS.fadeEnd,
+				},
+			},
+		});
 		this.pipelines = {
 			depth: depthPrepassRenderPipeline,
 			shadows: shadowDepthRenderPipeline,
 			PBR: PBRRenderPipeline,
 			postFX: postFXPipeline,
+			ssao: ssaoComputePipeline,
 		};
 
 		const cascadeBufferSizeBytes = 256;
 		this.uniformBuffers = {
 			camera: this.device.createBuffer({
 				label: "camera uniform buffer",
-				size: 36 * 4,
+				size: 256 + 64,
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			}),
 			shadows: this.device.createBuffer({
@@ -554,10 +613,22 @@ export default class Renderer {
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: this.uniformBuffers.camera, offset: 0, size: this.uniformBuffers.camera.size },
+					resource: { 
+						buffer: this.uniformBuffers.camera, 
+						offset: 0,
+						size: 36 * 4,
+					},
 				},
 				{
 					binding: 1,
+					resource: {
+						buffer: this.uniformBuffers.camera,
+						offset: 256,
+						size: 16 * 4,
+					}
+				},
+				{
+					binding: 2,
 					resource: {
 						buffer: this.uniformBuffers.shadows,
 						offset: 0,
@@ -592,6 +663,7 @@ export default class Renderer {
 			scene: null,
 			// depend on the screen size, and are created in buildScreenRenderDescriptors
 			depth: null,
+			ssao: null,
 			drawTexture: null,
 		};
 
@@ -723,23 +795,14 @@ export default class Renderer {
 			format: "depth32float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
-		const depthView = depthTexture.createView();
 
-		const depthDrawTexture = this.device.createTexture({
-			label: "depth draw texture",
+		const normalTexture = this.device.createTexture({
+			label: "depth pass view normal texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 4,
-			format: "r16float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+			format: "rgba16float",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
-
-		// const depthResolveTexture = this.device.createTexture({
-		// 	label: "depth resolve texture",
-		// 	size: [this.canvas.width, this.canvas.height],
-		// 	sampleCount: 1,
-		// 	format: "r16float",
-		// 	usage: GPUTextureUsage.RENDER_ATTACHMENT,
-		// })
 
 		// scene draw color texture
 		const sceneDrawTexture = this.device.createTexture({
@@ -762,14 +825,14 @@ export default class Renderer {
 		const sceneResolveView = sceneResolveTexture.createView();
 
 		// ssao output texture
-		const ssaoOutTexture = this.device.createTexture({
-			label: "ssao draw output texture",
+		const ssaoTexture = this.device.createTexture({
+			label: "ssao texture",
 			size: [this.canvas.width, this.canvas.height],
-			sampleCount: 4,
-			format: "r16float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+			sampleCount: 1,
+			format: "rgba16float",
+			dimension: "2d",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
 		});
-		const ssaoOutView = ssaoOutTexture.createView();
 
 		// resolve texture for ssao output
 		const ssaoResolveTexture = this.device.createTexture({
@@ -829,12 +892,8 @@ export default class Renderer {
 				},
 				{
 					binding: 3,
-					resource: depthTexture.createView(
-						{
-							"usage": GPUTextureUsage.TEXTURE_BINDING,
-						}
-					),
-				}
+					resource: ssaoTexture.createView(),
+				},
 			],
 		});
 
@@ -854,6 +913,25 @@ export default class Renderer {
 			],
 		});
 
+		this.globalUniformBindGroups.ssao = this.device.createBindGroup({
+			label: "ssao bind group",
+			layout: this.pipelines.ssao.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: depthTexture.createView(),
+				},
+				{
+					binding: 1,
+					resource: normalTexture.createView(),
+				},
+				{
+					binding: 2,
+					resource: ssaoTexture.createView(),
+				},
+			],
+		});
+
 		// update render pass descriptor textures
 		(this.renderPassDescriptors.depthPass as any).depthStencilAttachment = {
 			view: depthTexture.createView({
@@ -867,7 +945,7 @@ export default class Renderer {
 			clearValue: [0.0, 0.0, 0.0, 1.0],
 			loadOp: "clear",
 			storeOp: "store",
-			view: depthDrawTexture.createView(),
+			view: normalTexture.createView(),
 		}];
 
 		(this.renderPassDescriptors.sceneDraw as any).colorAttachments = [
@@ -877,13 +955,6 @@ export default class Renderer {
 				storeOp: "store",
 				view: sceneDrawView,
 				resolveTarget: sceneResolveView,
-			},
-			{
-				clearValue: [0.0, 0.0, 0.0, 1.0],
-				loadOp: "clear",
-				storeOp: "store",
-				view: ssaoOutView,
-				resolveTarget: ssaoResolveView,
 			},
 		];
 		(this.renderPassDescriptors.sceneDraw as any).depthStencilAttachment = {
@@ -1201,6 +1272,7 @@ export default class Renderer {
 			this.uniformBufferData.camera.set(this.camera.viewMatrix, 0);
 			this.uniformBufferData.camera.set(this.camera.projMatrix, 16);
 			this.uniformBufferData.camera.set(this.camera.position, 32);
+			this.uniformBufferData.camera.set(this.camera.projMatrixInverse, 64);
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.camera,
 				0,
@@ -1255,6 +1327,17 @@ export default class Renderer {
 				depthPass.drawIndexed(model.modelData.indexCount);
 			}
 			depthPass.end();
+		}
+
+		if (this.globalUniformBindGroups.ssao && this.globalUniformBindGroups.scene) {
+			// ssao pass
+			const ssaoPass = encoder.beginComputePass();
+			ssaoPass.setPipeline(this.pipelines.ssao);
+			ssaoPass.setBindGroup(0, this.globalUniformBindGroups.ssao);
+			ssaoPass.setBindGroup(1, this.globalUniformBindGroups.scene);
+			ssaoPass.setBindGroup(2, this.globalUniformBindGroups.camera);
+			ssaoPass.dispatchWorkgroups(Math.ceil(this.canvas.width / 8), Math.ceil(this.canvas.height / 8), 1);
+			ssaoPass.end();
 		}
 
 		if (this.globalUniformBindGroups.scene) {

@@ -334,7 +334,7 @@ export default class Sky {
 			fragment: {
 				module: shaders.skybox,
 				entryPoint: "fs",
-				targets: [{ format: "rgba16float" }, { format: "r16float" }],
+				targets: [{ format: "rgba16float" }],
 				constants: {
 					gamma: POSTFX_SETTINGS.gamma,
 					gamma_offset: SKY_SETTINGS.gammaOffset,
