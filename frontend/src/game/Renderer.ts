@@ -14,13 +14,14 @@ const MOUSE_SENSITIVITY = 2.0;
 export const DEBUG_GRAPHICS_TIME = true;
 export const SSAO_SETTINGS = {
 	sampleCount: 32,
-	radius: 0.9,
-	bias: 0.25,
+	radius: 0.5,
+	bias: 0.15,
 	kernelDotCutOff: 0.025,
 	noiseTextureSize: 32,
 	noiseScale: 1000.0,
-	fadeStart: 45.0,
-	fadeEnd: 105.0,
+	fadeStart: 60.0,
+	fadeEnd: 70.0,
+	blurKernelSize: 4,
 };
 export const SHADOW_SETTINGS = {
 	debugCascades: false,
@@ -61,6 +62,7 @@ export const SUN_SETTINGS = {
 	position: vec3.fromValues(20, 50, -17),
 	direction: vec3.normalize(vec3.fromValues(20, 50, -17)),
 	color: vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0)),
+	// intensity: 0,
 	intensity: 4.25,
 };
 export const SKY_SETTINGS = {
@@ -79,6 +81,7 @@ export const SKY_SETTINGS = {
 	gammaOffset: 0.2,
 };
 export const POSTFX_SETTINGS = {
+	// exposure: 0.725,
 	exposure: 0.325,
 	temperature: 0.2,
 	tint: 0.1,
@@ -121,6 +124,11 @@ export default class Renderer {
 		depth: GPUBindGroup | null;
 		scene: GPUBindGroup | null;
 		ssao: GPUBindGroup | null;
+		ssaoBlurX: GPUBindGroup | null;
+		ssaoBlurY: GPUBindGroup | null;
+		ssaoBlurKernelX: GPUBindGroup | null;
+		ssaoBlurKernelY: GPUBindGroup | null;
+		ssaoUpscale: GPUBindGroup | null;
 		drawTexture: GPUBindGroup | null;
 	};
 	private readonly pipelines: {
@@ -129,6 +137,9 @@ export default class Renderer {
 		shadows: GPURenderPipeline;
 		postFX: GPURenderPipeline;
 		ssao: GPUComputePipeline;
+		ssaoBlurX: GPUComputePipeline;
+		ssaoBlurY: GPUComputePipeline;
+		ssaoUpscale: GPUComputePipeline;
 	};
 	private renderPassDescriptors: {
 		depthPass: GPURenderPassDescriptor;
@@ -138,6 +149,9 @@ export default class Renderer {
 	};
 	private computePassDescriptors: {
 		ssao: GPUComputePassDescriptor;
+		ssaoBlurX: GPUComputePassDescriptor;
+		ssaoBlurY: GPUComputePassDescriptor;
+		ssaoUpscale: GPUComputePassDescriptor;
 	};
 	private shadowData: {
 		texture: GPUTexture | null;
@@ -580,9 +594,43 @@ export default class Renderer {
 					ssao_radius: SSAO_SETTINGS.radius,
 					ssao_bias: SSAO_SETTINGS.bias,
 					ssao_noise_scale: SSAO_SETTINGS.noiseScale,
-					// ssao_fade_start: SSAO_SETTINGS.fadeStart,
-					// ssao_fade_end: SSAO_SETTINGS.fadeEnd,
+					ssao_fade_start: SSAO_SETTINGS.fadeStart,
+					ssao_fade_end: SSAO_SETTINGS.fadeEnd,
 				},
+			},
+		});
+		const ssaoBlurXComputePipeline = this.device.createComputePipeline({
+			label: "ssao horizontal blur compute pipeline",
+			layout: "auto",
+			compute: {
+				module: this.shaders.ssaoBlur,
+				entryPoint: "compute_ssao_blur",
+				constants: {
+					kernel_size: SSAO_SETTINGS.blurKernelSize,
+					blur_x: 1.0,
+					blur_y: 0.0,
+				},
+			},
+		});
+		const ssaoBlurYComputePipeline = this.device.createComputePipeline({
+			label: "ssao vertical blur compute pipeline",
+			layout: "auto",
+			compute: {
+				module: this.shaders.ssaoBlur,
+				entryPoint: "compute_ssao_blur",
+				constants: {
+					kernel_size: SSAO_SETTINGS.blurKernelSize,
+					blur_x: 0.0,
+					blur_y: 1.0,
+				},
+			},
+		});
+		const ssaoUpscalePipeline = this.device.createComputePipeline({
+			label: "ssao upscale compute pipeline",
+			layout: "auto",
+			compute: {
+				module: this.shaders.ssaoUpscale,
+				entryPoint: "compute_ssao_upscale",
 			},
 		});
 		this.pipelines = {
@@ -591,6 +639,9 @@ export default class Renderer {
 			PBR: PBRRenderPipeline,
 			postFX: postFXPipeline,
 			ssao: ssaoComputePipeline,
+			ssaoBlurX: ssaoBlurXComputePipeline,
+			ssaoBlurY: ssaoBlurYComputePipeline,
+			ssaoUpscale: ssaoUpscalePipeline,
 		};
 
 		const cascadeBufferSizeBytes = 256;
@@ -659,14 +710,82 @@ export default class Renderer {
 			);
 		}
 
+		// ssao blur kernel bind group
+		const kernelData = [];
+		const kernelOffsets = [];
+		const sigma = 8.0;
+		let intensity = 0;
+		for (let i = -SSAO_SETTINGS.blurKernelSize; i <= SSAO_SETTINGS.blurKernelSize; i++) {
+			const gaussian =
+				(1.0 / Math.sqrt(2.0 * Math.PI * sigma * sigma)) * Math.exp(-(i * i) / (2.0 * sigma * sigma));
+
+			intensity += gaussian;
+			kernelData.push(gaussian);
+			kernelOffsets.push(i);
+		}
+		const interpKernelData = [];
+		const interpKernelOffsets = [];
+		let i = 0;
+		while (i + 1 < kernelData.length) {
+			const texA = kernelData[i];
+			const texB = kernelData[i + 1];
+			const alpha = texA / (texA + texB);
+			interpKernelData.push((texA + texB) / intensity);
+			interpKernelOffsets.push(alpha + kernelOffsets[i]);
+			i += 2;
+		}
+		if (i < kernelData.length) {
+			interpKernelData.push(kernelData[i] / intensity);
+			interpKernelOffsets.push(kernelOffsets[i]);
+		}
+		const kernelBuffer = this.device.createBuffer({
+			label: "ssao blur kernel buffer",
+			size: (interpKernelData.length * 2) * 4,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+			mappedAtCreation: true,
+		});
+		const kernelBufferData = new Float32Array(kernelBuffer.getMappedRange());
+		for (let i = 0; i < interpKernelData.length; i++) {
+			kernelBufferData[i * 2] = interpKernelData[i];
+			kernelBufferData[i * 2 + 1] = interpKernelOffsets[i];
+		}
+		kernelBuffer.unmap();
+		const ssaoBlurXKernelBindGroup = this.device.createBindGroup({
+			layout: ssaoBlurXComputePipeline.getBindGroupLayout(1),
+			entries: [
+				{
+					binding: 0,
+					resource: {
+						buffer: kernelBuffer,
+					},
+				},
+			],
+		});
+		const ssaoBlurYKernelBindGroup = this.device.createBindGroup({
+			layout: ssaoBlurYComputePipeline.getBindGroupLayout(1),
+			entries: [
+				{
+					binding: 0,
+					resource: {
+						buffer: kernelBuffer,
+					},
+				},
+			],
+		});
+
 		this.globalUniformBindGroups = {
 			camera: cameraBindGroup,
 			shadows: shadowBindGroups,
+			ssaoBlurKernelX: ssaoBlurXKernelBindGroup,
+			ssaoBlurKernelY: ssaoBlurYKernelBindGroup,
 			// depend on the lighting load state, and is created in onLightingLoad
 			scene: null,
 			// depend on the screen size, and are created in buildScreenRenderDescriptors
 			depth: null,
 			ssao: null,
+			ssaoBlurX: null,
+			ssaoBlurY: null,
+			ssaoUpscale: null,
 			drawTexture: null,
 		};
 
@@ -725,6 +844,15 @@ export default class Renderer {
 		this.computePassDescriptors = {
 			ssao: {
 				label: "SSAO Pass",
+			},
+			ssaoBlurX: {
+				label: "SSAO Blur Pass X",
+			},
+			ssaoBlurY: {
+				label: "SSAO Blur Pass Y",
+			},
+			ssaoUpscale: {
+				label: "SSAO Upscale Pass",
 			},
 		};
 
@@ -837,9 +965,10 @@ export default class Renderer {
 		const sceneResolveView = sceneResolveTexture.createView();
 
 		// ssao output texture
+		const ssaoResolution = [Math.ceil(this.canvas.width / 2), Math.ceil(this.canvas.height / 2)];
 		const ssaoTexture = this.device.createTexture({
 			label: "ssao texture",
-			size: [this.canvas.width, this.canvas.height],
+			size: ssaoResolution,
 			sampleCount: 1,
 			format: "rgba16float",
 			dimension: "2d",
@@ -847,15 +976,23 @@ export default class Renderer {
 				GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
 		});
 
+		const ssaoBlurXTexture = this.device.createTexture({
+			label: "ssao blur texture",
+			size: ssaoResolution,
+			sampleCount: 1,
+			format: "rgba16float",
+			dimension: "2d",
+			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+		});
+
 		// resolve texture for ssao output
-		const ssaoResolveTexture = this.device.createTexture({
-			label: "ssao single-sample resolve texture",
+		const ssaoUpscaleTexture = this.device.createTexture({
+			label: "ssao upscale texture",
 			size: [this.canvas.width, this.canvas.height],
 			sampleCount: 1,
-			format: "r16float",
-			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+			format: "rgba16float",
+			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
 		});
-		const ssaoResolveView = ssaoResolveTexture.createView();
 
 		// screen postfx ouptut color texture
 		const screenOutputTexture = this.device.createTexture({
@@ -905,7 +1042,7 @@ export default class Renderer {
 				},
 				{
 					binding: 3,
-					resource: ssaoTexture.createView(),
+					resource: ssaoUpscaleTexture.createView(),
 				},
 			],
 		});
@@ -922,6 +1059,7 @@ export default class Renderer {
 				{
 					binding: 1,
 					resource: sceneResolveView,
+					// resource: ssaoUpscaleTexture.createView(),
 				},
 			],
 		});
@@ -941,6 +1079,70 @@ export default class Renderer {
 				{
 					binding: 2,
 					resource: ssaoTexture.createView(),
+				},
+			],
+		});
+
+		const ssaoSampler = this.device.createSampler({
+			minFilter: "linear",
+			magFilter: "linear",
+			addressModeU: "clamp-to-edge",
+			addressModeV: "clamp-to-edge",
+		});
+
+		this.globalUniformBindGroups.ssaoBlurX = this.device.createBindGroup({
+			label: "ssao horizontal blur bind group",
+			layout: this.pipelines.ssaoBlurX.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: ssaoTexture.createView(),
+				},
+				{
+					binding: 1,
+					resource: ssaoSampler,
+				},
+				{
+					binding: 2,
+					resource: ssaoBlurXTexture.createView(),
+				},
+			],
+		});
+
+		this.globalUniformBindGroups.ssaoBlurY = this.device.createBindGroup({
+			label: "ssao vertical blur bind group",
+			layout: this.pipelines.ssaoBlurY.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: ssaoBlurXTexture.createView(),
+				},
+				{
+					binding: 1,
+					resource: ssaoSampler,
+				},
+				{
+					binding: 2,
+					resource: ssaoTexture.createView(),
+				},
+			],
+		});
+
+		this.globalUniformBindGroups.ssaoUpscale = this.device.createBindGroup({
+			label: "ssao upscale bind group",
+			layout: this.pipelines.ssaoUpscale.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: ssaoTexture.createView(),
+				},
+				{
+					binding: 1,
+					resource: ssaoSampler,
+				},
+				{
+					binding: 2,
+					resource: ssaoUpscaleTexture.createView(),
 				},
 			],
 		});
@@ -1065,12 +1267,12 @@ export default class Renderer {
 			const sample = vec3.fromValues(Math.random() * 2.0 - 1.0, Math.random() * 2.0 - 1.0, Math.random());
 			vec3.normalize(sample, sample);
 			let scale = i / SSAO_SETTINGS.sampleCount;
-			scale = 0.1 + scale * scale * (1.0 - 0.1);
+			// scale = 0.1 + scale * scale * (1.0 - 0.1);
 			vec3.scale(sample, scale, sample);
 
-			if (vec3.normalize(sample)[2] < SSAO_SETTINGS.kernelDotCutOff) {
-				continue;
-			}
+			// if (vec3.normalize(sample)[2] < SSAO_SETTINGS.kernelDotCutOff) {
+			// 	continue;
+			// }
 
 			ssaoBufferData.set(sample, i * 4);
 			i++;
@@ -1351,8 +1553,30 @@ export default class Renderer {
 			ssaoPass.setBindGroup(0, this.globalUniformBindGroups.ssao);
 			ssaoPass.setBindGroup(1, this.globalUniformBindGroups.scene);
 			ssaoPass.setBindGroup(2, this.globalUniformBindGroups.camera);
-			ssaoPass.dispatchWorkgroups(Math.ceil(this.canvas.width / 8), Math.ceil(this.canvas.height / 8), 1);
+			ssaoPass.dispatchWorkgroups(Math.ceil(this.canvas.width / 16), Math.ceil(this.canvas.height / 16), 1);
 			ssaoPass.end();
+
+			// ssao blur horizontal pass
+			let ssaoBlurPass = encoder.beginComputePass(this.computePassDescriptors.ssaoBlurX);
+			ssaoBlurPass.setPipeline(this.pipelines.ssaoBlurX);
+			ssaoBlurPass.setBindGroup(0, this.globalUniformBindGroups.ssaoBlurX);
+			ssaoBlurPass.setBindGroup(1, this.globalUniformBindGroups.ssaoBlurKernelX);
+			ssaoBlurPass.dispatchWorkgroups(Math.ceil(this.canvas.width / 16), Math.ceil(this.canvas.height / 16), 1);
+			ssaoBlurPass.end();
+			
+			ssaoBlurPass = encoder.beginComputePass(this.computePassDescriptors.ssaoBlurY);
+			ssaoBlurPass.setPipeline(this.pipelines.ssaoBlurY);
+			ssaoBlurPass.setBindGroup(0, this.globalUniformBindGroups.ssaoBlurY);
+			ssaoBlurPass.setBindGroup(1, this.globalUniformBindGroups.ssaoBlurKernelY);
+			ssaoBlurPass.dispatchWorkgroups(Math.ceil(this.canvas.width / 16), Math.ceil(this.canvas.height / 16), 1);
+			ssaoBlurPass.end();
+
+			// ssao upscale pass
+			const ssaoUpscalePass = encoder.beginComputePass(this.computePassDescriptors.ssaoUpscale);
+			ssaoUpscalePass.setPipeline(this.pipelines.ssaoUpscale);
+			ssaoUpscalePass.setBindGroup(0, this.globalUniformBindGroups.ssaoUpscale);
+			ssaoUpscalePass.dispatchWorkgroups(Math.ceil(this.canvas.width / 8), Math.ceil(this.canvas.height / 8), 1);
+			ssaoUpscalePass.end();
 		}
 
 		if (this.globalUniformBindGroups.scene) {

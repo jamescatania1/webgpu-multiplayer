@@ -36,12 +36,15 @@ struct ComputeIn {
 fn compute_ssao(in: ComputeIn) {
     let depth_dimensions: vec2<f32> = vec2<f32>(textureDimensions(u_depth).xy);
 
-    let uv: vec2<f32> = vec2<f32>(in.id.xy) / depth_dimensions;
+    let uv: vec2<f32> = vec2<f32>(in.id.xy * 2u) / depth_dimensions;
 
-    let view_pos: vec3<f32> = view_position(vec2<i32>(in.id.xy));
+    let view_pos: vec3<f32> = view_position(vec2<i32>(in.id.xy * 2u));
+    if (view_pos.z < -ssao_fade_end) {
+        textureStore(u_ssao_texture, vec2<i32>(in.id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
 
-    var view_normal: vec3<f32> = textureLoad(u_normal, vec2<i32>(in.id.xy), 0).rgb;
-    // view_normal = view_normal
+    var view_normal: vec3<f32> = textureLoad(u_normal, vec2<i32>(in.id.xy * 2u), 0).rgb;
 
     var random_vec: vec3<f32> = normalize(textureSampleLevel(u_ssao_noise, u_ssao_noise_sampler, uv * ssao_noise_scale, 0.0).xyz);
 
@@ -69,11 +72,9 @@ fn compute_ssao(in: ComputeIn) {
         // occlusion += f32(offset.x);
     }
     occlusion /= f32(ssao_samples);
-
+    occlusion *= (1.0 - smoothstep(0.0, 1.0, max(0.0, (view_pos.z - ssao_fade_start) / (ssao_fade_end - ssao_fade_start))));
     occlusion = pow(occlusion, 1.6);
 
-    // let tmp = u_camera.proj_matrix * 
-    // occlusion = occlusion * 0.000001 + u_camera.proj_matrix * vec4<f32>(view_pos, 1.0);
 
     textureStore(u_ssao_texture, vec2<i32>(in.id.xy), vec4<f32>(vec3<f32>(occlusion), 1.0));
 }
@@ -88,6 +89,6 @@ fn view_position(pixel_coords: vec2<i32>) -> vec3<f32> {
         depth,
         1.0
     );
-    var view_pos: vec4<f32> = u_camera_inverse.proj_inverse * screen_pos;
+    let view_pos: vec4<f32> = u_camera_inverse.proj_inverse * screen_pos;
     return view_pos.xyz / view_pos.w;
 }

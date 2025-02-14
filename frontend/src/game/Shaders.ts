@@ -4,6 +4,8 @@ import { default as depthShaderSource } from "./shaders/depth.wgsl";
 import { default as shadowShaderSource } from "./shaders/shadows.wgsl";
 import { default as skyboxShaderSource } from "./shaders/skybox.wgsl";
 import { default as ssaoShaderSource } from "./shaders/ssao.wgsl";
+import { default as ssaoBlurShaderSource } from "./shaders/ssao_blur.wgsl";
+import { default as ssaoUpscaleShaderSource } from "./shaders/ssao_upscale.wgsl";
 import { default as postFXShaderSource } from "./shaders/post_fx.wgsl";
 import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
 import { default as irradianceGeneratorSource } from "./shaders/irradiance_gen.wgsl";
@@ -18,6 +20,8 @@ export type Shaders = {
 	shadows: GPUShaderModule;
 	skybox: GPUShaderModule;
 	ssao: GPUShaderModule;
+	ssaoBlur: GPUShaderModule;
+	ssaoUpscale: GPUShaderModule;
 	postFX: GPUShaderModule;
 	cubemapGenerator: GPUShaderModule;
 	irradianceGenerator: GPUShaderModule;
@@ -67,6 +71,14 @@ export function loadShaders(device: GPUDevice): Shaders {
 			"ssao_samples": Math.round(SSAO_SETTINGS.sampleCount).toString(),
 		},
 	});
+	const ssaoBlur = loadShader(device, {
+		label: "ssao blur shader",
+		code: ssaoBlurShaderSource,
+	});
+	const ssaoUpscale = loadShader(device, {
+		label: "ssao upscale shader",
+		code: ssaoUpscaleShaderSource,
+	});
 	const postFX = loadShader(device, {
 		label: "post processing shader",
 		code: postFXShaderSource,
@@ -95,6 +107,8 @@ export function loadShaders(device: GPUDevice): Shaders {
 		shadows: shadows,
 		skybox: skybox,
 		ssao: ssao,
+		ssaoBlur: ssaoBlur,
+		ssaoUpscale: ssaoUpscale,
 		postFX: postFX,
 		cubemapGenerator: cubemapGenerator,
 		irradianceGenerator: irradianceGenerator,

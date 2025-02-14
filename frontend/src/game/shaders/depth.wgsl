@@ -43,5 +43,5 @@ fn vs(in: VertexIn) -> VertexOut {
 fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     let screen_pos: vec3<f32> = in.view_pos.xyz / in.view_pos.w;
     let view_normal = cross(dpdyFine(screen_pos), dpdxFine(screen_pos));
-    return vec4<f32>(normalize(view_normal * vec3<f32>(1.0, -1.0, -1.0)), 1.0);
+    return vec4<f32>(normalize(view_normal * vec3<f32>(1.0, -1.0, 1.0)), 1.0);
 }

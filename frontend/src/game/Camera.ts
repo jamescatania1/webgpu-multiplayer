@@ -9,7 +9,7 @@ type CascadeTransform = {
 export default class Camera {
 	public position = vec3.create();
 	public fov = 85;
-	public near = 0.5;
+	public near = 0.1;
 	public far = 300.0;
 	public pitch = 0.0;
 	public yaw = 0.0;

@@ -332,6 +332,11 @@ fn fs(in: VertexOut) -> FragmentOut {
         color = mix(color, visualize_cascades(in), 0.75);
     }
 
+    // var view_normal: vec3<f32> = in.view_pos.xyz / in.view_pos.w;
+    // view_normal = cross(dpdyFine(view_normal), dpdxFine(view_normal));
+    // view_normal = normalize(normalize(-view_normal) - normalize(in.view_normal));
+    // view_normal = normalize(in.view_normal);
+
     var out: FragmentOut;
     out.color = vec4<f32>(color * occlusion, 1.0);
     // out.color = vec4<f32>(color * 0.00001 + occlusion, 1.0);
