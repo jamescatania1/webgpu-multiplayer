@@ -14,8 +14,8 @@ const MOUSE_SENSITIVITY = 2.0;
 export const DEBUG_GRAPHICS_TIME = true;
 export const SSAO_SETTINGS = {
 	sampleCount: 32,
-	radius: 0.175,
-	bias: 0.285,
+	radius: 0.9,
+	bias: 0.25,
 	kernelDotCutOff: 0.025,
 	noiseTextureSize: 32,
 	noiseScale: 1000.0,
@@ -97,7 +97,7 @@ export default class Renderer {
 		querySet: GPUQuerySet;
 		resolveBuffer: GPUBuffer;
 		resultBuffer: GPUBuffer;
-		debugRenderPasses: GPURenderPassDescriptor[];
+		debugPasses: (GPURenderPassDescriptor | GPUComputePassDescriptor)[];
 		data: { [key: string]: number };
 	} | null = null;
 	private readonly uniformBuffers: {
@@ -135,6 +135,9 @@ export default class Renderer {
 		shadowPass: GPURenderPassDescriptor[];
 		sceneDraw: GPURenderPassDescriptor;
 		postFX: GPURenderPassDescriptor;
+	};
+	private computePassDescriptors: {
+		ssao: GPUComputePassDescriptor;
 	};
 	private shadowData: {
 		texture: GPUTexture | null;
@@ -240,8 +243,8 @@ export default class Renderer {
 						viewDimension: "2d",
 						multisampled: false,
 						sampleType: "float",
-					}
-				}
+					},
+				},
 			],
 		});
 		const sceneBindGroupLayout = this.device.createBindGroupLayout({
@@ -331,7 +334,7 @@ export default class Renderer {
 						viewDimension: "2d",
 						multisampled: true,
 						sampleType: "unfilterable-float",
-					}
+					},
 				},
 				{
 					binding: 2,
@@ -340,9 +343,9 @@ export default class Renderer {
 						access: "write-only",
 						format: "rgba16float",
 						viewDimension: "2d",
-					}
-				}
-			]
+					},
+				},
+			],
 		});
 		this.globalUniformBindGroupLayouts = {
 			camera: cameraBindGroupLayout,
@@ -394,7 +397,7 @@ export default class Renderer {
 				targets: [
 					{
 						format: "rgba16float",
-					}
+					},
 				],
 			},
 			primitive: {
@@ -548,7 +551,7 @@ export default class Renderer {
 				targets: [{ format: this.presentationFormat }],
 				constants: {
 					...POSTFX_SETTINGS,
-				}
+				},
 			},
 			primitive: {
 				topology: "triangle-strip",
@@ -613,8 +616,8 @@ export default class Renderer {
 			entries: [
 				{
 					binding: 0,
-					resource: { 
-						buffer: this.uniformBuffers.camera, 
+					resource: {
+						buffer: this.uniformBuffers.camera,
 						offset: 0,
 						size: 36 * 4,
 					},
@@ -625,7 +628,7 @@ export default class Renderer {
 						buffer: this.uniformBuffers.camera,
 						offset: 256,
 						size: 16 * 4,
-					}
+					},
 				},
 				{
 					binding: 2,
@@ -719,13 +722,19 @@ export default class Renderer {
 		// create the output textures and render pass descriptor
 		this.buildScreenRenderDescriptors();
 
+		this.computePassDescriptors = {
+			ssao: {
+				label: "SSAO Pass",
+			},
+		};
+
 		if (context.timestampQuery) {
 			this.buildDebugBuffers();
 		} else {
 			this.timestampData = null;
 		}
 
-		loadBOBJ(this.device, "/scene.bobj").then((data) => {
+		loadBOBJ(this.device, "/city.bobj").then((data) => {
 			const model = new Model(this.device, this.camera, transformBindGroupLayout, data);
 			model.transform.rotation[1] = Math.PI;
 			model.metallic = 1.0;
@@ -736,23 +745,26 @@ export default class Renderer {
 	}
 
 	private buildDebugBuffers() {
-		const renderPasses = [];
-		for (const descriptor of Object.values(this.renderPassDescriptors)) {
+		const passes = [];
+		for (const descriptor of [
+			...Object.values(this.renderPassDescriptors),
+			...Object.values(this.computePassDescriptors),
+		]) {
 			if (!descriptor) {
 				continue;
 			}
 			if (Symbol.iterator in descriptor) {
 				for (const desc of descriptor) {
-					renderPasses.push(desc);
+					passes.push(desc);
 				}
 			} else {
-				renderPasses.push(descriptor);
+				passes.push(descriptor);
 			}
 		}
 
 		const querySet = this.device.createQuerySet({
 			type: "timestamp",
-			count: 2 * renderPasses.length,
+			count: 2 * passes.length,
 		});
 		const resolveBuffer = this.device.createBuffer({
 			size: querySet.count * 8,
@@ -766,12 +778,12 @@ export default class Renderer {
 			querySet: querySet,
 			resolveBuffer: resolveBuffer,
 			resultBuffer: resultBuffer,
-			debugRenderPasses: renderPasses,
-			data: { ...Object.fromEntries(renderPasses.map((desc, i) => [desc.label, 0])) },
+			debugPasses: passes,
+			data: { ...Object.fromEntries(passes.map((desc, i) => [desc.label, 0])) },
 		};
 
-		for (let i = 0; i < renderPasses.length; i++) {
-			renderPasses[i].timestampWrites = {
+		for (let i = 0; i < passes.length; i++) {
+			passes[i].timestampWrites = {
 				querySet: querySet,
 				beginningOfPassWriteIndex: i * 2,
 				endOfPassWriteIndex: i * 2 + 1,
@@ -831,7 +843,8 @@ export default class Renderer {
 			sampleCount: 1,
 			format: "rgba16float",
 			dimension: "2d",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+			usage:
+				GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
 		});
 
 		// resolve texture for ssao output
@@ -941,12 +954,14 @@ export default class Renderer {
 			depthLoadOp: "clear",
 			depthStoreOp: "store",
 		};
-		(this.renderPassDescriptors.depthPass as any).colorAttachments = [{
-			clearValue: [0.0, 0.0, 0.0, 1.0],
-			loadOp: "clear",
-			storeOp: "store",
-			view: normalTexture.createView(),
-		}];
+		(this.renderPassDescriptors.depthPass as any).colorAttachments = [
+			{
+				clearValue: [0.0, 0.0, 0.0, 1.0],
+				loadOp: "clear",
+				storeOp: "store",
+				view: normalTexture.createView(),
+			},
+		];
 
 		(this.renderPassDescriptors.sceneDraw as any).colorAttachments = [
 			{
@@ -1331,7 +1346,7 @@ export default class Renderer {
 
 		if (this.globalUniformBindGroups.ssao && this.globalUniformBindGroups.scene) {
 			// ssao pass
-			const ssaoPass = encoder.beginComputePass();
+			const ssaoPass = encoder.beginComputePass(this.computePassDescriptors.ssao);
 			ssaoPass.setPipeline(this.pipelines.ssao);
 			ssaoPass.setBindGroup(0, this.globalUniformBindGroups.ssao);
 			ssaoPass.setBindGroup(1, this.globalUniformBindGroups.scene);
@@ -1401,8 +1416,8 @@ export default class Renderer {
 		if (this.timestampData && this.timestampData.resultBuffer.mapState === "unmapped") {
 			this.timestampData.resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
 				const timestamps = new BigInt64Array(this.timestampData!.resultBuffer.getMappedRange());
-				for (let i = 0; i < this.timestampData!.debugRenderPasses.length; i++) {
-					const pass = this.timestampData!.debugRenderPasses[i].label || `Pass ${i}`;
+				for (let i = 0; i < this.timestampData!.debugPasses.length; i++) {
+					const pass = this.timestampData!.debugPasses[i].label || `Pass ${i}`;
 					const time = Number(timestamps[i * 2 + 1] - timestamps[i * 2]) / 1000;
 					this.timestampData!.data[pass] = time;
 				}

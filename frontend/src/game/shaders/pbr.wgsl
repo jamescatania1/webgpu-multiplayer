@@ -235,49 +235,6 @@ fn visualize_cascades(in: VertexOut) -> vec3<f32> {
     }
 }
 
-// fn ssao(view_pos: vec3<f32>, view_normal: vec3<f32>, sample_location: vec2<f32>, clip_z: f32) -> f32 {
-//     var v_n = normalize(view_normal);
-//     var random_vec: vec3<f32> = normalize(textureSample(u_ssao_noise, u_ssao_noise_sampler, sample_location * ssao_noise_scale).xyz);
-//     var tangent: vec3<f32> = normalize(random_vec - v_n * dot(random_vec, v_n));
-//     var bitangent: vec3<f32> = cross(v_n, tangent);
-//     var tbn: mat3x3<f32> = mat3x3<f32>(tangent, bitangent, v_n);
-//     var occlusion: f32 = 0.0;
-//     let depth_dimensions: vec2<f32> = vec2<f32>(textureDimensions(u_depth).xy);
-//     for (var i: i32 = 0; i < ssao_samples; i++) {
-//         var sample_pos: vec3<f32> = tbn * u_ssao.kernel[i];
-//         sample_pos = sample_pos * ssao_radius + view_pos;
-        
-//         var offset: vec4<f32> = vec4<f32>(sample_pos, 1.0);
-//         offset = u_global.proj_matrix * offset;
-//         offset = offset / offset.w;
-//         offset = offset * 0.5 + 0.5;
-//         offset.y = 1.0 - offset.y;
-
-//         let pixel_coords: vec2<i32> = vec2<i32>(offset.xy * depth_dimensions);
-//         var sample_depth: f32 = textureLoad(u_depth, pixel_coords, 0).z;
-//         var range_check: f32 = smoothstep(0.0, 1.0, ssao_radius / abs(view_pos.z - sample_depth));
-//         let d_z = sample_depth - sample_pos.z;
-//         if (d_z > ssao_bias && d_z < ssao_radius) {
-//             occlusion += 1.0;
-//         }
-//     }
-//     occlusion /= f32(ssao_samples);
-    
-//     // fades out occlusion at further distances
-//     let depth_linear: f32 = (2.0 * near) / (far + near - (clip_z * 2.0 - 1.0) * (far - near));
-//     let occlusion_fade: f32 = 1.0 - clamp((depth_linear * (far - near) - ssao_fade_start) / (ssao_fade_end - ssao_fade_start), 0.0, 1.0);
-//     occlusion = clamp(1.0 - occlusion_fade * occlusion, 0.0, 1.0);
-
-//     let sc_pos = u_global.proj_matrix * vec4<f32>(view_pos, 1.0);
-//     var sc_poss = (sc_pos.xy / sc_pos.w) * 0.5 + 0.5;
-//     sc_poss.y = 1.0 - sc_poss.y;
-//     let pixel_coords: vec2<i32> = vec2<i32>(sc_poss * depth_dimensions);
-//     var sample_depth: f32 = textureLoad(u_depth, pixel_coords, 0).z;
-//     return occlusion * 0.00000001 + sample_depth * 1.0;
-//     // return occlusion * 0.0001 + view_pos.z;
-//     // return occlusion;
-// }
-
 @fragment 
 fn fs(in: VertexOut) -> FragmentOut {
     let n = normalize(in.normal);
@@ -353,10 +310,8 @@ fn fs(in: VertexOut) -> FragmentOut {
     }
 
     // SSAO
-    // let screen_pos: vec2<f32> = (in.pos.xy) * 0.5 + 0.5;
     let occlusion: f32 = 1.0 - textureSample(u_ssao, u_scene_sampler, in.pos.xy / u_screen_size).r;
-    // var occlusion: f32 = 1.0 - textureSample(u_ssao, u_scene_sampler, ).r;
-    light += occlusion * ambient;
+    light += ambient;
 
 
     var color: vec3<f32> = light;

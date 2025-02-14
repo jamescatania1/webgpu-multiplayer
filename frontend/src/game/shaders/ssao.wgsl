@@ -70,6 +70,8 @@ fn compute_ssao(in: ComputeIn) {
     }
     occlusion /= f32(ssao_samples);
 
+    occlusion = pow(occlusion, 1.6);
+
     // let tmp = u_camera.proj_matrix * 
     // occlusion = occlusion * 0.000001 + u_camera.proj_matrix * vec4<f32>(view_pos, 1.0);
 
