@@ -733,13 +733,13 @@ export default class Renderer {
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 
-		const depthResolveTexture = this.device.createTexture({
-			label: "depth resolve texture",
-			size: [this.canvas.width, this.canvas.height],
-			sampleCount: 1,
-			format: "r16float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT,
-		})
+		// const depthResolveTexture = this.device.createTexture({
+		// 	label: "depth resolve texture",
+		// 	size: [this.canvas.width, this.canvas.height],
+		// 	sampleCount: 1,
+		// 	format: "r16float",
+		// 	usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		// })
 
 		// scene draw color texture
 		const sceneDrawTexture = this.device.createTexture({
@@ -868,7 +868,6 @@ export default class Renderer {
 			loadOp: "clear",
 			storeOp: "store",
 			view: depthDrawTexture.createView(),
-			resolveTarget: depthResolveTexture.createView(),
 		}];
 
 		(this.renderPassDescriptors.sceneDraw as any).colorAttachments = [
@@ -890,7 +889,6 @@ export default class Renderer {
 		(this.renderPassDescriptors.sceneDraw as any).depthStencilAttachment = {
 			view: depthTexture.createView({
 				usage: GPUTextureUsage.RENDER_ATTACHMENT,
-	
 			}),
 			depthReadOnly: true,
 		};

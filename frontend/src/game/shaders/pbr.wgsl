@@ -179,7 +179,14 @@ fn ssao(view_pos: vec3<f32>, view_normal: vec3<f32>, sample_location: vec2<f32>,
     let occlusion_fade: f32 = 1.0 - clamp((depth_linear * (far - near) - ssao_fade_start) / (ssao_fade_end - ssao_fade_start), 0.0, 1.0);
     occlusion = clamp(1.0 - occlusion_fade * occlusion, 0.0, 1.0);
 
-    return occlusion;
+    let sc_pos = u_global.proj_matrix * vec4<f32>(view_pos, 1.0);
+    var sc_poss = (sc_pos.xy / sc_pos.w) * 0.5 + 0.5;
+    sc_poss.y = 1.0 - sc_poss.y;
+    let pixel_coords: vec2<i32> = vec2<i32>(sc_poss * depth_dimensions);
+    var sample_depth: f32 = textureLoad(u_depth, pixel_coords, 0);
+    return occlusion * 0.00000001 + sample_depth * 1.0;
+    // return occlusion * 0.0001 + view_pos.z;
+    // return occlusion;
 }
 
 const sun_size: f32 = 4.0;
@@ -358,12 +365,21 @@ fn fs(in: VertexOut) -> FragmentOut {
     }
 
     // SSAO
-    let occlusion = ssao(in.view_pos.xyz, in.view_normal, in.vertex_pos_hash, in.pos.z);
+    var occlusion = ssao(in.view_pos.xyz, in.view_normal, in.vertex_pos_hash, in.pos.z);
     light += occlusion * ambient;
+
+
+    let sc_pos = in.pos;
+    var sc_poss = in.pos.xy;
+    sc_poss.y = 1.0 - sc_poss.y;
+    let depth_dimensions: vec2<f32> = vec2<f32>(textureDimensions(u_depth).xy);
+    let pixel_coords: vec2<i32> = vec2<i32>(sc_poss * depth_dimensions);
+    var sample_depth: f32 = textureLoad(u_depth, pixel_coords, 0);
+    occlusion = occlusion * 0.000001 + sample_depth;
 
     // light += ambient * 1.0;
 
-    var color: vec3<f32> = light * 0.0001 + occlusion;
+    var color: vec3<f32> = light;
 
     // fog
     let fog_factor: f32 = saturate((view_depth - fog_start) / (fog_end - fog_start));
@@ -375,14 +391,15 @@ fn fs(in: VertexOut) -> FragmentOut {
         fog_mip
     ).rgb;
     fog_sky_color = pow(fog_sky_color, vec3<f32>(1.0 / 2.2));
-    color = mix(color, fog_sky_color, fog_factor) * 0.0001 + color;
+    color = mix(color, fog_sky_color, fog_factor);
 
     if (debug_cascades) {
         color = mix(color, visualize_cascades(in), 0.75);
     }
 
     var out: FragmentOut;
-    out.color = vec4<f32>(color, 1.0);
+    // out.color = vec4<f32>(color, 1.0);
+    out.color = vec4<f32>(color * 0.00001 + vec3<f32>(occlusion), 1.0);
     out.occlusion = vec4<f32>(color, 1.0);
     return out;
 }

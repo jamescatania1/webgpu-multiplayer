@@ -43,8 +43,8 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
     // color = color * 0.0001 + textureSample(color_texture, color_sampler, in.uv).rgb;
 
     color = pow(color, vec3f(1.0 / gamma));
-    return vec4f(color, 1.0);
-    // return vec4<f32>(textureSample(color_texture, color_sampler, in.uv).rgb, 1.0);
+    // return vec4f(color, 1.0);
+    return vec4<f32>(textureSample(color_texture, color_sampler, in.uv).rgb + color * 0.00001, 1.0);
 }
 
 fn white_balance(color: vec3f) -> vec3f {

@@ -24,10 +24,6 @@ struct VertexOut {
     @location(0) view_pos: vec4f,
 };
 
-struct FragmentOut {
-    @location(0) color: vec4f,
-};
-
 @vertex 
 fn vs(in: VertexIn) -> VertexOut {
     let x: f32 = f32(in.vertex_xyzc.x >> 16u) / 65535.0 - 0.5;
@@ -48,8 +44,6 @@ fn linearize_depth(depth: f32) -> f32 {
 }
 
 @fragment 
-fn fs(in: VertexOut) -> FragmentOut {
-    var out: FragmentOut;
-    out.color = vec4<f32>(in.pos.z / in.pos.w);
-    return out;   
+fn fs(in: VertexOut) -> @location(0) f32 {
+    return in.view_pos.z;
 }
