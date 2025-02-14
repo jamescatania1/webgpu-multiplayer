@@ -1,79 +1,132 @@
-import {gameStats } from "$lib/stores.svelte";
+import { gameStats } from "$lib/stores.svelte";
 import Input from "./Input";
-import Scene from "./Scene";
 import WasmWorker from "./wasm/WasmWorker?worker";
+import Renderer, { DEBUG_GRAPHICS_TIME } from "./Renderer";
+
+export type RenderContext = {
+	adapter: GPUAdapter;
+	device: GPUDevice;
+	ctx: GPUCanvasContext;
+	timestampQuery: boolean;
+};
 
 export default class Game {
 	private input: Input;
 	private worker: Worker;
 
-	private drawTime: number = 0;
 	private frameTime: number = 0;
+	private graphicsTime: { [key: string]: number } | null = null;
 	private statsPollCount: number = 0;
 	private statsPollStart: number = 0;
 
 	constructor(canvas: HTMLCanvasElement) {
-		const gl = canvas.getContext("webgl2");
-		if (!gl) {
-			throw new Error("Unable to initialize WebGL. Your browser or machine may not support it.");
-		}
-		if (!gl.getExtension("EXT_color_buffer_float")) {
-			throw new Error("Rendering to floating point textures is not supported on this platform");
-		}
-		if (!gl.getExtension("OES_texture_float_linear")) {
-			throw new Error("Rendering to floating point textures is not supported on this platform");
-		}
+		this.input = new Input(canvas);
 
-		const input = new Input(canvas);
-		const scene = new Scene(gl);
-		this.input = input;
+		this.init(canvas)
+			.then((ctx) => {
+				let renderer: Renderer | null = null;
+				const resize = () => {
+					canvas.width = Math.min(window.innerWidth, ctx.device.limits.maxTextureDimension2D);
+					canvas.height = Math.min(window.innerHeight, ctx.device.limits.maxTextureDimension2D);
+					renderer?.onResize();
+				};
+				resize();
+				window.addEventListener("resize", resize);
 
-		// main draw loop
-		let prevTime = NaN;
-		const draw = (time: number) => {
-			if (Number.isNaN(prevTime)) {
-				prevTime = time;
-			}
-			const deltaTime = Math.max(0, time - prevTime);
-			prevTime = time;
+				renderer = new Renderer(canvas, ctx);
 
-			const startTime = performance.now();
-			scene.draw(gl, input, deltaTime);
+				if (renderer.timestampData) {
+					this.graphicsTime = {...renderer.timestampData.data};
+				}
 
-			const endTime = performance.now();
-			this.drawTime += endTime - startTime;
-			this.frameTime += deltaTime;
-			this.statsPollCount += 1;
-			if (endTime - this.statsPollStart > 250) {
-				gameStats.drawTime = this.drawTime / this.statsPollCount;
-				gameStats.fps = 1000.0 / (this.frameTime / this.statsPollCount);
-				this.statsPollStart = endTime;
-				this.statsPollCount = 0;
-				this.drawTime = 0;
-				this.frameTime = 0;
-			}
+				// main draw loop
+				let prevTime = NaN;
+				const draw = (time: number) => {
+					if (Number.isNaN(prevTime)) {
+						prevTime = time;
+					}
+					const deltaTime = Math.max(0, time - prevTime);
+					prevTime = time;
 
-			input.update();
+					const startTime = performance.now();
+					renderer.draw(this.input, deltaTime);
 
-			requestAnimationFrame(draw);
-		};
+					const endTime = performance.now();
+					this.frameTime += deltaTime;
+					if (this.graphicsTime) {
+						for (const key in this.graphicsTime) {
+							this.graphicsTime[key] += renderer.timestampData!.data[key];
+						}
+					}
+					this.statsPollCount += 1;
+					if (endTime - this.statsPollStart > 250) {
+						const frameStats: { [key: string]: number } = {};
+						if (this.graphicsTime) {
+							for (const label in this.graphicsTime) {
+								frameStats[label] = this.graphicsTime[label] / this.statsPollCount;
+								this.graphicsTime[label] = 0;
+							}
+						}
+						gameStats.passes = frameStats;
+						gameStats.fps = 1000.0 / (this.frameTime / this.statsPollCount);
+						this.statsPollStart = endTime;
+						this.statsPollCount = 0;
+						this.frameTime = 0;
+					}
 
-		requestAnimationFrame(draw);
+					this.input.update();
+
+					requestAnimationFrame(draw);
+				};
+
+				requestAnimationFrame(draw);
+			})
+			.catch((e) => {
+				console.error(e);
+			});
 
 		// init socket and worker for communication
 		const worker = new WasmWorker();
-
 		worker.onmessage = (e) => {
 			if (e.data === "socket closed") {
 				worker.terminate();
 			}
 		};
-
 		this.worker = worker;
 	}
 
 	public onDestroy() {
 		this.input.onDestroy();
 		this.worker.terminate();
+	}
+
+	public async init(canvas: HTMLCanvasElement): Promise<RenderContext> {
+		const adapter = await navigator.gpu?.requestAdapter();
+		if (!adapter) {
+			throw new Error("WebGPU not supported on this browser");
+		}
+		let timestampQuery = DEBUG_GRAPHICS_TIME;
+		if (DEBUG_GRAPHICS_TIME && !adapter.features.has("timestamp-query")) {
+			timestampQuery = false;
+			console.error("Device is unable to time graphics operations, disabling debug graphics stats.");
+		}
+		const device = await (timestampQuery ?
+			adapter.requestDevice({ requiredFeatures: ["timestamp-query"] }) :
+			adapter.requestDevice());
+		if (!device) {
+			throw new Error("WebGPU not supported on this browser");
+		}
+
+		const ctx = canvas.getContext("webgpu");
+		if (!ctx) {
+			throw new Error("Failed to bind game to the active canvas.");
+		}
+
+		return {
+			adapter: adapter,
+			device: device,
+			ctx: ctx,
+			timestampQuery: timestampQuery,
+		};
 	}
 }

@@ -12,6 +12,7 @@
 		"moduleResolution": "bundler",
 		"types": [
 			"vite-plugin-glsl/ext",
+			"@webgpu/types",
 		],
 	}
 	// Path aliases are handled by https://svelte.dev/docs/kit/configuration#alias
