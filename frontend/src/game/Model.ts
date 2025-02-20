@@ -1,9 +1,9 @@
 import { vec3, type Vec3 } from "wgpu-matrix";
 import Transform from "./Transform";
 import type Camera from "./Camera";
-import { TRANSFORM_BUFFER_SIZE, type TransformBuffer } from "./Renderer";
 
 export type ModelData = {
+	name: string;
 	vertexBuffer: GPUBuffer;
 	vertexCount: number;
 	indexBuffer: GPUBuffer;
@@ -112,6 +112,7 @@ export async function loadBOBJ(device: GPUDevice, url: string): Promise<ModelDat
 					indexBuffer.unmap();
 
 					resolve({
+						name: url,
 						vertexBuffer: vertexBuffer,
 						vertexCount: vertexCount,
 						indexBuffer: indexBuffer,

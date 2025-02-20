@@ -305,7 +305,7 @@ func main() {
 	}
 
 	var indexBytes uint8
-	if maxIndex > math.MaxUint16 { // encode as 32-bit indices
+	if maxIndex > 0 { // encode as 32-bit indices
 		indexBytes = 4
 	} else if maxIndex > math.MaxUint8 { // encode as 16-bit indices
 		indexBytes = 2

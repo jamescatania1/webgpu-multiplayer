@@ -94,28 +94,23 @@ export const POSTFX_SETTINGS = {
 	brightness: 0.0,
 	gamma: 2.0,
 };
-export const TRANSFORM_BUFFER_SIZE = 256;
+export const TRANSFORM_BUFFER_SIZE = 128;
 const DEFAULT_TRANFORM_BUFFER_SIZE = {
 	static: 10 * TRANSFORM_BUFFER_SIZE,
 	dynamic: 10 * TRANSFORM_BUFFER_SIZE,
 };
 
-export type TransformBuffer = {
-	buffer: GPUBuffer;
-	data: Float32Array;
-};
-
 type SceneObject = {
 	model: Model;
-	dynamic: boolean;
-	transformBindGroup: GPUBindGroup | null;
-	transformIndex: number;
+	usage: "static" | "dynamic";
+	instance: number;
 };
-type RenderEntityCollection = {
+type InstanceCollection = {
+	model: ModelData;
 	objects: SceneObject[];
-	transform: TransformBuffer;
-	bufferFreeList: number[];
-	bufferTailIndex: number;
+	instanceBuffer: GPUBuffer;
+	instanceData: Float32Array;
+	instanceCount: number;
 };
 
 export default class Renderer {
@@ -143,6 +138,20 @@ export default class Renderer {
 		camera: Float32Array;
 		shadows: Float32Array;
 	};
+	private models: {
+		static: {
+			[key: string]: InstanceCollection;
+		};
+		dynamic: {
+			[key: string]: InstanceCollection;
+		};
+	} = {
+		static: {},
+		dynamic: {},
+	};
+	private meshes: {
+		[key: string]: ModelData;
+	} = {};
 	private globalUniformBindGroupLayouts: {
 		camera: GPUBindGroupLayout;
 		shadows: GPUBindGroupLayout;
@@ -206,12 +215,7 @@ export default class Renderer {
 	private readonly shaders: Shaders;
 	private readonly camera: Camera;
 	private readonly sky: Sky;
-	private models: { [key: string]: ModelData } = {};
 	private objects: SceneObject[] = [];
-	private renderEntities: {
-		static: RenderEntityCollection;
-		dynamic: RenderEntityCollection;
-	};
 	private postFXQuad: {
 		vertexBuffer: GPUBuffer;
 		sampler: GPUSampler;
@@ -500,10 +504,62 @@ export default class Renderer {
 			transform: transformBindGroupLayout,
 		};
 
+		const transformInstanceBufferLayout: GPUVertexBufferLayout = {
+			arrayStride: 128,
+			stepMode: "instance",
+			attributes: [
+				{
+					shaderLocation: 3,
+					offset: 0,
+					format: "float32x4",
+				},
+				{
+					shaderLocation: 4,
+					offset: 16,
+					format: "float32x4",
+				},
+				{
+					shaderLocation: 5,
+					offset: 32,
+					format: "float32x4",
+				},
+				{
+					shaderLocation: 6,
+					offset: 48,
+					format: "float32x4",
+				},
+				{
+					shaderLocation: 7,
+					offset: 64,
+					format: "float32x3",
+				},
+				{
+					shaderLocation: 8,
+					offset: 80,
+					format: "float32x3",
+				},
+				{
+					shaderLocation: 9,
+					offset: 96,
+					format: "float32x3",
+				},
+				{
+					shaderLocation: 10,
+					offset: 112,
+					format: "float32x3",
+				},
+				{
+					shaderLocation: 11,
+					offset: 124,
+					format: "float32",
+				},
+			],
+		};
+
 		// pipelines for drawing the pbr scene models
 		const depthPrepassPipelineLayout = this.device.createPipelineLayout({
 			label: "depth prepass layout",
-			bindGroupLayouts: [this.globalUniformBindGroupLayouts.camera, this.globalUniformBindGroupLayouts.transform],
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.camera],
 		});
 		const depthPrepassRenderPipeline = this.device.createRenderPipeline({
 			label: "depth prepass",
@@ -524,6 +580,7 @@ export default class Renderer {
 							},
 						],
 					},
+					transformInstanceBufferLayout,
 				],
 			},
 			fragment: {
@@ -550,7 +607,7 @@ export default class Renderer {
 		});
 		const shadowDepthPipelineLayout = this.device.createPipelineLayout({
 			label: "shadow pass layout",
-			bindGroupLayouts: [this.globalUniformBindGroupLayouts.shadows, transformBindGroupLayout],
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.shadows],
 		});
 		const shadowDepthRenderPipeline = this.device.createRenderPipeline({
 			label: "shadow depth pass pipeline",
@@ -571,6 +628,7 @@ export default class Renderer {
 							},
 						],
 					},
+					transformInstanceBufferLayout,
 				],
 			},
 			fragment: {
@@ -595,7 +653,6 @@ export default class Renderer {
 			label: "PBR render pipeline layout",
 			bindGroupLayouts: [
 				this.globalUniformBindGroupLayouts.camera,
-				transformBindGroupLayout,
 				this.globalUniformBindGroupLayouts.depth,
 				this.globalUniformBindGroupLayouts.scene,
 			],
@@ -631,6 +688,7 @@ export default class Renderer {
 							},
 						],
 					},
+					transformInstanceBufferLayout,
 				],
 			},
 			fragment: {
@@ -829,7 +887,6 @@ export default class Renderer {
 			camera: new Float32Array(this.uniformBuffers.camera.size / 4),
 			shadows: new Float32Array(this.uniformBuffers.shadows.size / 4),
 		};
-		this.renderEntities = this.buildEntityBuffers();
 
 		new Int32Array(this.uniformBuffers.bloomDownsample.prefilterEnabled.getMappedRange())[0] = 1;
 		this.uniformBuffers.bloomDownsample.prefilterEnabled.unmap();
@@ -1048,10 +1105,21 @@ export default class Renderer {
 			this.timestampData = null;
 		}
 
-		loadBOBJ(this.device, "/scene.bobj").then((data) => {
-			this.models.scene = data;
-			this.addObject(data, false);
+		loadBOBJ(this.device, "/monke.bobj").then((data) => {
+			for (let i = 0; i < 1000; i++) {
+				const obj = this.addObject(data, "static");
+				obj.model.transform.position[0] = Math.random() * 10.0;
+				obj.model.transform.position[1] = Math.random() * 10.0;
+				obj.model.transform.position[2] = Math.random() * 10.0;
+				obj.model.update(this.device, this.camera);
+			}
 		});
+		 
+		// loadBOBJ(this.device, "/monke.bobj").then((data) => {
+		// 	for (let i = 0; i < 1; i++) {
+		// 		this.addObject(data, "static");
+		// 	}
+		// });
 	}
 
 	/**
@@ -1060,24 +1128,46 @@ export default class Renderer {
 	 * @param dynamic if true, the model's transform buffer is updated each frame.
 	 * @returns the added object.
 	 */
-	public addObject(modelData: ModelData, dynamic: boolean): SceneObject {
-		const entityCollection = dynamic ? this.renderEntities.dynamic : this.renderEntities.static;
+	public addObject(modelData: ModelData, usage: "static" | "dynamic"): SceneObject {
+		let collection = this.models[usage][modelData.name];
+		if (!collection) {
+			collection = {
+				model: modelData,
+				instanceCount: 0,
+				instanceBuffer: this.device.createBuffer({
+					label: `${modelData.name} instance buffer`,
+					size: DEFAULT_TRANFORM_BUFFER_SIZE[usage],
+					usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+				}),
+				instanceData: new Float32Array(DEFAULT_TRANFORM_BUFFER_SIZE[usage] / 4),
+				objects: [],
+			};
+			this.models[usage][modelData.name] = collection;
+		} else if (collection.instanceCount >= collection.instanceBuffer.size / TRANSFORM_BUFFER_SIZE) {
+			// resize the instance buffer
+			console.log("resizing instance buffer", (collection.instanceBuffer.size * 2) / TRANSFORM_BUFFER_SIZE);
+			const instanceBuffer = this.device.createBuffer({
+				label: `${modelData.name} instance buffer`,
+				size: collection.instanceBuffer.size * 2,
+				usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+			});
+			const instanceData = new Float32Array(instanceBuffer.size / 4);
+			instanceData.set(collection.instanceData);
+
+			collection.instanceBuffer = instanceBuffer;
+			collection.instanceData = instanceData;
+		}
 		const model = new Model(this.device, this.camera, modelData);
 		const object: SceneObject = {
 			model: model,
-			dynamic: dynamic,
-			transformBindGroup: null,
-			transformIndex:
-				entityCollection.bufferFreeList.length > 0
-					? entityCollection.bufferFreeList.pop()!
-					: entityCollection.bufferTailIndex++,
+			usage: usage,
+			instance: collection.instanceCount++,
 		};
 		this.objects.push(object);
-		entityCollection.objects.push(object);
-		this.updateTransformBuffers(entityCollection, dynamic);
+		collection.objects.push(object);
 
 		model.update(this.device, this.camera);
-		this.updateTransformBufferData(entityCollection);
+		this.updateInstanceBufferData(collection);
 
 		return object;
 	}
@@ -1090,21 +1180,38 @@ export default class Renderer {
 		if (!object) {
 			return;
 		}
-		const index = this.objects.indexOf(object);
-		if (index < 0) {
-			console.error("Tried to unregister dangling object", object);
-			return;
-		}
-		this.objects.splice(index, 1);
+		// const index = this.objects.indexOf(object);
+		// if (index < 0) {
+		// 	console.error("Tried to unregister dangling object", object);
+		// 	return;
+		// }
+		// this.objects.splice(index, 1);
 
-		const entityCollection = object.dynamic ? this.renderEntities.dynamic : this.renderEntities.static;
-		const entityIndex = entityCollection.objects.indexOf(object);
-		if (entityIndex < 0) {
-			console.error("Tried to unregister dangling entity object", object);
-			return;
+		// const entityCollection = object.dynamic ? this.renderEntities.dynamic : this.renderEntities.static;
+		// const entityIndex = entityCollection.objects.indexOf(object);
+		// if (entityIndex < 0) {
+		// 	console.error("Tried to unregister dangling entity object", object);
+		// 	return;
+		// }
+		// entityCollection.objects.splice(entityIndex, 1);
+		// entityCollection.bufferFreeList.push(object.transformIndex);
+	}
+
+	private updateInstanceBufferData(collection: InstanceCollection) {
+		const stride = TRANSFORM_BUFFER_SIZE / 4;
+		for (const obj of collection.objects) {
+			collection.instanceData.set(obj.model.transform.matrix, obj.instance * stride);
+			collection.instanceData.set(obj.model.transform.normalMatrix, obj.instance * stride + 16);
+			collection.instanceData.set(obj.model.modelData.offset, obj.instance * stride + 28);
+			collection.instanceData.set([1.0 / obj.model.modelData.scale], obj.instance * stride + 31);
 		}
-		entityCollection.objects.splice(entityIndex, 1);
-		entityCollection.bufferFreeList.push(object.transformIndex);
+		this.device.queue.writeBuffer(
+			collection.instanceBuffer,
+			0,
+			collection.instanceData.buffer,
+			collection.instanceData.byteOffset,
+			collection.instanceData.byteLength,
+		);
 	}
 
 	private buildDebugBuffers() {
@@ -1154,97 +1261,80 @@ export default class Renderer {
 		}
 	}
 
-	private buildEntityBuffers(): { static: RenderEntityCollection; dynamic: RenderEntityCollection } {
-		const res: any = {};
-		for (const bufferKey of ["static", "dynamic"]) {
-			const collection: RenderEntityCollection = {
-				objects: [],
-				transform: {
-					buffer: this.device.createBuffer({
-						label: `${bufferKey} transform buffer`,
-						size: (DEFAULT_TRANFORM_BUFFER_SIZE as any)[bufferKey]!,
-						usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-					}),
-					data: new Float32Array((DEFAULT_TRANFORM_BUFFER_SIZE as any)[bufferKey]! / 4),
-				},
-				bufferFreeList: [],
-				bufferTailIndex: 0,
-			};
-			res[bufferKey] = collection;
-		}
-		return res;
-	}
+	// private buildEntityBuffers(): { static: RenderEntityCollection; dynamic: RenderEntityCollection } {
+	// 	const res: any = {};
+	// 	for (const bufferKey of ["static", "dynamic"]) {
+	// 		const collection: RenderEntityCollection = {
+	// 			objects: [],
+	// 			transform: {
+	// 				buffer: this.device.createBuffer({
+	// 					label: `${bufferKey} transform buffer`,
+	// 					size: (DEFAULT_TRANFORM_BUFFER_SIZE as any)[bufferKey]!,
+	// 					usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+	// 				}),
+	// 				data: new Float32Array((DEFAULT_TRANFORM_BUFFER_SIZE as any)[bufferKey]! / 4),
+	// 			},
+	// 			bufferFreeList: [],
+	// 			bufferTailIndex: 0,
+	// 		};
+	// 		res[bufferKey] = collection;
+	// 	}
+	// 	return res;
+	// }
 
-	private updateTransformBuffers(entityCollection: RenderEntityCollection, dynamic: boolean) {
-		if (entityCollection.bufferTailIndex <= entityCollection.transform.buffer.size / TRANSFORM_BUFFER_SIZE) {
-			// transform buffer has enough space to fit the new object
-			for (const object of entityCollection.objects) {
-				if (object.transformBindGroup) {
-					continue;
-				}
-				object.transformBindGroup = this.device.createBindGroup({
-					layout: this.globalUniformBindGroupLayouts.transform,
-					entries: [
-						{
-							binding: 0,
-							resource: {
-								buffer: entityCollection.transform.buffer,
-								offset: object.transformIndex * TRANSFORM_BUFFER_SIZE,
-								size: TRANSFORM_BUFFER_SIZE,
-							},
-						},
-					],
-				});
-			}
-			return;
-		}
-		// resize the transform buffer, copy any old data, and update the bind groups
-		const transformBufferData = new Float32Array(entityCollection.transform.data.length * 2);
-		console.log("setting new buffer data, size", transformBufferData.length);
-		transformBufferData.set(entityCollection.transform.data);
+	// private updateTransformBuffers(entityCollection: RenderEntityCollection, dynamic: boolean) {
+	// 	if (entityCollection.bufferTailIndex <= entityCollection.transform.buffer.size / TRANSFORM_BUFFER_SIZE) {
+	// 		// transform buffer has enough space to fit the new object
+	// 		for (const object of entityCollection.objects) {
+	// 			if (object.transformBindGroup) {
+	// 				continue;
+	// 			}
+	// 			object.transformBindGroup = this.device.createBindGroup({
+	// 				layout: this.globalUniformBindGroupLayouts.transform,
+	// 				entries: [
+	// 					{
+	// 						binding: 0,
+	// 						resource: {
+	// 							buffer: entityCollection.transform.buffer,
+	// 							offset: object.transformIndex * TRANSFORM_BUFFER_SIZE,
+	// 							size: TRANSFORM_BUFFER_SIZE,
+	// 						},
+	// 					},
+	// 				],
+	// 			});
+	// 		}
+	// 		return;
+	// 	}
+	// 	// resize the transform buffer, copy any old data, and update the bind groups
+	// 	const transformBufferData = new Float32Array(entityCollection.transform.data.length * 2);
+	// 	console.log("setting new buffer data, size", transformBufferData.length);
+	// 	transformBufferData.set(entityCollection.transform.data);
 
-		const transformBuffer: TransformBuffer = {
-			buffer: this.device.createBuffer({
-				label: `${dynamic ? "dynamic" : "static"} transform buffer`,
-				size: transformBufferData.byteLength,
-				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-			}),
-			data: transformBufferData,
-		};
-		entityCollection.transform = transformBuffer;
-		for (const object of entityCollection.objects) {
-			object.transformBindGroup = this.device.createBindGroup({
-				layout: this.globalUniformBindGroupLayouts.transform,
-				entries: [
-					{
-						binding: 0,
-						resource: {
-							buffer: transformBuffer.buffer,
-							offset: object.transformIndex * TRANSFORM_BUFFER_SIZE,
-							size: TRANSFORM_BUFFER_SIZE,
-						},
-					},
-				],
-			});
-		}
-	}
-
-	private updateTransformBufferData({ transform, objects }: RenderEntityCollection) {
-		const stride = TRANSFORM_BUFFER_SIZE / 4;
-		for (const obj of objects) {
-			transform.data.set(obj.model.transform.matrix, obj.transformIndex * stride);
-			transform.data.set(obj.model.transform.normalMatrix, obj.transformIndex * stride + 16);
-			transform.data.set(obj.model.modelData.offset, obj.transformIndex * stride + 28);
-			transform.data.set([1.0 / obj.model.modelData.scale], obj.transformIndex * stride + 31);
-		}
-		this.device.queue.writeBuffer(
-			transform.buffer,
-			0,
-			transform.data.buffer,
-			transform.data.byteOffset,
-			transform.data.byteLength,
-		);
-	}
+	// 	const transformBuffer: TransformBuffer = {
+	// 		buffer: this.device.createBuffer({
+	// 			label: `${dynamic ? "dynamic" : "static"} transform buffer`,
+	// 			size: transformBufferData.byteLength,
+	// 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+	// 		}),
+	// 		data: transformBufferData,
+	// 	};
+	// 	entityCollection.transform = transformBuffer;
+	// 	for (const object of entityCollection.objects) {
+	// 		object.transformBindGroup = this.device.createBindGroup({
+	// 			layout: this.globalUniformBindGroupLayouts.transform,
+	// 			entries: [
+	// 				{
+	// 					binding: 0,
+	// 					resource: {
+	// 						buffer: transformBuffer.buffer,
+	// 						offset: object.transformIndex * TRANSFORM_BUFFER_SIZE,
+	// 						size: TRANSFORM_BUFFER_SIZE,
+	// 					},
+	// 				},
+	// 			],
+	// 		});
+	// 	}
+	// }
 
 	/**
 	 * Called upon initialization and change of the canvas size
@@ -1855,6 +1945,17 @@ export default class Renderer {
 	}
 
 	public draw(input: Input, deltaTime: number) {
+		for (const obj of this.objects) {
+			obj.model.roughness = 0.0;
+			obj.model.transform.rotation[0] += deltaTime * 0.000001 * obj.instance;
+			obj.model.transform.rotation[1] += deltaTime * 0.000001 * obj.instance;
+			obj.model.transform.rotation[2] += deltaTime * 0.000001 * obj.instance;
+			obj.model.update(this.device, this.camera);
+		}
+		if (this.models.static["/monke.bobj"]) {
+			this.updateInstanceBufferData(this.models.static["/monke.bobj"]);
+		}
+
 		// game logic
 		{
 			// rotate camera with mouse delta
@@ -1904,8 +2005,8 @@ export default class Renderer {
 		}
 
 		if (input.keyPressed("v")) {
-			if (this.models.scene) {
-				this.addObject(this.models.scene, false);
+			if (this.meshes.scene) {
+				this.addObject(this.meshes.scene, "static");
 			}
 		}
 		if (input.keyPressed("b")) {
@@ -1950,11 +2051,11 @@ export default class Renderer {
 				const shadowPass = encoder.beginRenderPass(this.renderPassDescriptors.shadowPass![i]);
 				shadowPass.setPipeline(this.pipelines.shadows);
 				shadowPass.setBindGroup(0, this.globalUniformBindGroups.shadows![i]);
-				for (const obj of this.objects) {
-					shadowPass.setBindGroup(1, obj.transformBindGroup);
-					shadowPass.setVertexBuffer(0, obj.model.modelData.vertexBuffer);
-					shadowPass.setIndexBuffer(obj.model.modelData.indexBuffer, obj.model.modelData.indexFormat);
-					shadowPass.drawIndexed(obj.model.modelData.indexCount);
+				for (const collection of Object.values(this.models.static)) {
+					shadowPass.setVertexBuffer(0, collection.model.vertexBuffer);
+					shadowPass.setVertexBuffer(1, collection.instanceBuffer);
+					shadowPass.setIndexBuffer(collection.model.indexBuffer, collection.model.indexFormat);
+					shadowPass.drawIndexed(collection.model.indexCount, collection.instanceCount);
 				}
 				shadowPass.end();
 			}
@@ -1966,11 +2067,11 @@ export default class Renderer {
 			depthPass.setPipeline(this.pipelines.depth);
 			depthPass.setBindGroup(0, this.globalUniformBindGroups.camera);
 
-			for (const obj of this.objects) {
-				depthPass.setBindGroup(1, obj.transformBindGroup);
-				depthPass.setVertexBuffer(0, obj.model.modelData.vertexBuffer);
-				depthPass.setIndexBuffer(obj.model.modelData.indexBuffer, obj.model.modelData.indexFormat);
-				depthPass.drawIndexed(obj.model.modelData.indexCount);
+			for (const collection of Object.values(this.models.static)) {
+				depthPass.setVertexBuffer(0, collection.model.vertexBuffer);
+				depthPass.setVertexBuffer(1, collection.instanceBuffer);
+				depthPass.setIndexBuffer(collection.model.indexBuffer, collection.model.indexFormat);
+				depthPass.drawIndexed(collection.model.indexCount, collection.instanceCount);
 			}
 			depthPass.end();
 		}
@@ -2013,14 +2114,14 @@ export default class Renderer {
 			const drawPass = encoder.beginRenderPass(this.renderPassDescriptors.sceneDraw!);
 			drawPass.setPipeline(this.pipelines.PBR);
 			drawPass.setBindGroup(0, this.globalUniformBindGroups.camera);
-			drawPass.setBindGroup(2, this.globalUniformBindGroups.depth);
-			drawPass.setBindGroup(3, this.globalUniformBindGroups.scene);
+			drawPass.setBindGroup(1, this.globalUniformBindGroups.depth);
+			drawPass.setBindGroup(2, this.globalUniformBindGroups.scene);
 
-			for (const obj of this.objects) {
-				drawPass.setBindGroup(1, obj.transformBindGroup);
-				drawPass.setVertexBuffer(0, obj.model.modelData.vertexBuffer);
-				drawPass.setIndexBuffer(obj.model.modelData.indexBuffer, obj.model.modelData.indexFormat);
-				drawPass.drawIndexed(obj.model.modelData.indexCount);
+			for (const collection of Object.values(this.models.static)) {
+				drawPass.setVertexBuffer(0, collection.model.vertexBuffer);
+				drawPass.setVertexBuffer(1, collection.instanceBuffer);
+				drawPass.setIndexBuffer(collection.model.indexBuffer, collection.model.indexFormat);
+				drawPass.drawIndexed(collection.model.indexCount, collection.instanceCount);
 			}
 
 			if (this.sky.skyboxRenderData) {

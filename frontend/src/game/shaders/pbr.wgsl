@@ -29,36 +29,37 @@ struct ShadowData {
 }
 @group(0) @binding(2) var<uniform> u_shadow: array<ShadowData, 3>;
 
-struct TransformData {
-    model_matrix: mat4x4<f32>,
-    normal_matrix: mat3x3<f32>,
-    model_offset: vec3<f32>,
-    model_scale: f32,
-}
-@group(1) @binding(0) var<uniform> u_transform: TransformData;
+@group(1) @binding(0) var u_depth_sampler: sampler;
+@group(1) @binding(1) var u_shadowmap: texture_depth_2d_array;
+@group(1) @binding(2) var<uniform> u_screen_size: vec2<f32>;
+@group(1) @binding(3) var u_ssao: texture_2d<f32>;
 
-@group(2) @binding(0) var u_depth_sampler: sampler;
-@group(2) @binding(1) var u_shadowmap: texture_depth_2d_array;
-@group(2) @binding(2) var<uniform> u_screen_size: vec2<f32>;
-@group(2) @binding(3) var u_ssao: texture_2d<f32>;
-
-@group(3) @binding(2) var u_scene_sampler: sampler;
-@group(3) @binding(3) var u_irradiance: texture_cube<f32>;
-@group(3) @binding(4) var u_prefilter: texture_cube<f32>;
-@group(3) @binding(5) var u_brdf: texture_2d<f32>;
+@group(2) @binding(2) var u_scene_sampler: sampler;
+@group(2) @binding(3) var u_irradiance: texture_cube<f32>;
+@group(2) @binding(4) var u_prefilter: texture_cube<f32>;
+@group(2) @binding(5) var u_brdf: texture_2d<f32>;
 struct LightingData {
     sun_direction: vec3<f32>,
     sun_color: vec4<f32>,
 };
-@group(3) @binding(7) var<uniform> u_lighting: LightingData;
-@group(3) @binding(8) var u_shadowmap_sampler_comparison: sampler_comparison;
-@group(3) @binding(9) var u_shadowmap_sampler: sampler;
-@group(3) @binding(10) var<uniform> u_shadowmap_kernel:  array<vec4<f32>, TEMPL_shadow_kernel_size>;
+@group(2) @binding(7) var<uniform> u_lighting: LightingData;
+@group(2) @binding(8) var u_shadowmap_sampler_comparison: sampler_comparison;
+@group(2) @binding(9) var u_shadowmap_sampler: sampler;
+@group(2) @binding(10) var<uniform> u_shadowmap_kernel:  array<vec4<f32>, TEMPL_shadow_kernel_size>;
 
 struct VertexIn { 
     @location(0) vertex_xyzc: vec2<u32>,
     @location(1) vertex_normal: u32,
     @location(2) vertex_uv: u32,
+    @location(3) model_matrix_1: vec4<f32>,
+    @location(4) model_matrix_2: vec4<f32>,
+    @location(5) model_matrix_3: vec4<f32>,
+    @location(6) model_matrix_4: vec4<f32>,
+    @location(7) normal_matrix_1: vec3<f32>,
+    @location(8) normal_matrix_2: vec3<f32>,
+    @location(9) normal_matrix_3: vec3<f32>,
+    @location(10) model_offset: vec3<f32>,
+    @location(11) model_scale: f32,
 };
 
 struct VertexOut {
@@ -83,10 +84,22 @@ struct FragmentOut {
 
 @vertex 
 fn vs(in: VertexIn) -> VertexOut {
+    let model_matrix: mat4x4<f32> = mat4x4<f32>(
+        in.model_matrix_1, 
+        in.model_matrix_2, 
+        in.model_matrix_3, 
+        in.model_matrix_4
+    );
+    let normal_matrix: mat3x3<f32> = mat3x3<f32>(
+        in.normal_matrix_1,
+        in.normal_matrix_2,
+        in.normal_matrix_3,
+    );
+
     let x: f32 = f32(in.vertex_xyzc.x >> 16u) / 65535.0 - 0.5;
     let y: f32 = f32(in.vertex_xyzc.x & 0xFFFFu) / 65535.0 - 0.5;
     let z: f32 = f32(in.vertex_xyzc.y >> 16u) / 65535.0 - 0.5;
-    let world_pos: vec4<f32> = u_transform.model_matrix * vec4<f32>(vec3<f32>(x, y, z) * u_transform.model_scale + u_transform.model_offset, 1.0);
+    let world_pos: vec4<f32> = model_matrix * vec4<f32>(vec3<f32>(x, y, z) * in.model_scale + in.model_offset, 1.0);
     let view_pos: vec4<f32> = u_global.view_matrix * world_pos;
     let clip_pos: vec4<f32> = u_global.proj_matrix * view_pos;
 
@@ -97,7 +110,7 @@ fn vs(in: VertexIn) -> VertexOut {
     let nx: f32 = f32(in.vertex_normal >> 22u) / 511.5 - 1.0;
     let ny: f32 = f32((in.vertex_normal >> 12u) & 0x3FFu) / 511.5 - 1.0;
     let nz: f32 = f32((in.vertex_normal >> 2u) & 0x3FFu) / 511.5 - 1.0;
-    let normal = u_transform.normal_matrix * vec3<f32>(nx, ny, nz);
+    let normal = normal_matrix * vec3<f32>(nx, ny, nz);
 
     let u: f32 = f32(in.vertex_uv >> 16u) / 65535.0;
     let v: f32 = f32(in.vertex_uv & 0xFFFFu) / 65535.0;
@@ -113,7 +126,7 @@ fn vs(in: VertexIn) -> VertexOut {
     out.view_pos = view_pos;
     out.world_pos = vec3<f32>(world_pos.xyz);
     out.normal = normal;
-    out.view_normal = (u_global.view_matrix * (u_transform.model_matrix * vec4<f32>(normal.xyz, 0.0))).xyz;
+    out.view_normal = (u_global.view_matrix * (model_matrix * vec4<f32>(normal.xyz, 0.0))).xyz;
     out.uv = vec2<f32>(u, v);
     out.screen_uv = (clip_pos.xy / clip_pos.w) * 0.5 + 0.5;
     out.screen_uv.y = 1.0 - out.screen_uv.y;
