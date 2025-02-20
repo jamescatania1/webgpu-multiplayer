@@ -95,6 +95,10 @@ export const POSTFX_SETTINGS = {
 	gamma: 2.0,
 };
 export const TRANSFORM_BUFFER_SIZE = 256;
+const DEFAULT_TRANFORM_BUFFER_SIZE = {
+	static: 10 * TRANSFORM_BUFFER_SIZE,
+	dynamic: 10 * TRANSFORM_BUFFER_SIZE,
+};
 
 export type TransformBuffer = {
 	buffer: GPUBuffer;
@@ -106,6 +110,12 @@ type SceneObject = {
 	dynamic: boolean;
 	transformBindGroup: GPUBindGroup | null;
 	transformIndex: number;
+};
+type RenderEntityCollection = {
+	objects: SceneObject[];
+	transform: TransformBuffer;
+	bufferFreeList: number[];
+	bufferTailIndex: number;
 };
 
 export default class Renderer {
@@ -196,16 +206,11 @@ export default class Renderer {
 	private readonly shaders: Shaders;
 	private readonly camera: Camera;
 	private readonly sky: Sky;
+	private models: { [key: string]: ModelData } = {};
 	private objects: SceneObject[] = [];
 	private renderEntities: {
-		static: {
-			objects: SceneObject[];
-			transform: TransformBuffer | null;
-		};
-		dynamic: {
-			objects: SceneObject[];
-			transform: TransformBuffer | null;
-		};
+		static: RenderEntityCollection;
+		dynamic: RenderEntityCollection;
 	};
 	private postFXQuad: {
 		vertexBuffer: GPUBuffer;
@@ -491,7 +496,7 @@ export default class Renderer {
 			scene: sceneBindGroupLayout,
 			ssao: ssaoBindGroupLayout,
 			bloomDownsample: bloomDownsampleBindGroupLayout,
-      upsample: upsampleBindGroupLayout,
+			upsample: upsampleBindGroupLayout,
 			transform: transformBindGroupLayout,
 		};
 
@@ -764,7 +769,7 @@ export default class Renderer {
 				constants: {
 					threshold: BLOOM_SETTINGS.threshold,
 					soft_threshold: BLOOM_SETTINGS.softThreshold,
-				}
+				},
 			},
 		});
 		const bloomUpsamplePipelineLayout = this.device.createPipelineLayout({
@@ -824,16 +829,7 @@ export default class Renderer {
 			camera: new Float32Array(this.uniformBuffers.camera.size / 4),
 			shadows: new Float32Array(this.uniformBuffers.shadows.size / 4),
 		};
-		this.renderEntities = {
-			static: {
-				objects: [],
-				transform: null,
-			},
-			dynamic: {
-				objects: [],
-				transform: null,
-			},
-		};
+		this.renderEntities = this.buildEntityBuffers();
 
 		new Int32Array(this.uniformBuffers.bloomDownsample.prefilterEnabled.getMappedRange())[0] = 1;
 		this.uniformBuffers.bloomDownsample.prefilterEnabled.unmap();
@@ -1053,32 +1049,62 @@ export default class Renderer {
 		}
 
 		loadBOBJ(this.device, "/scene.bobj").then((data) => {
-			this.addObject(data, false);
-			this.addObject(data, false);
-			this.addObject(data, true);
-			this.addObject(data, true);
+			this.models.scene = data;
 			this.addObject(data, false);
 		});
 	}
 
-	public addObject(modelData: ModelData, dynamic: boolean) {
+	/**
+	 * Adds an object to the scene.
+	 * @param modelData the model mesh data.
+	 * @param dynamic if true, the model's transform buffer is updated each frame.
+	 * @returns the added object.
+	 */
+	public addObject(modelData: ModelData, dynamic: boolean): SceneObject {
+		const entityCollection = dynamic ? this.renderEntities.dynamic : this.renderEntities.static;
 		const model = new Model(this.device, this.camera, modelData);
 		const object: SceneObject = {
 			model: model,
 			dynamic: dynamic,
 			transformBindGroup: null,
-			transformIndex: this.objects.length,
+			transformIndex:
+				entityCollection.bufferFreeList.length > 0
+					? entityCollection.bufferFreeList.pop()!
+					: entityCollection.bufferTailIndex++,
 		};
 		this.objects.push(object);
-		if (dynamic) {
-			this.renderEntities.dynamic.objects.push(object);
-		} else {
-			this.renderEntities.static.objects.push(object);
-		}
-		this.updateTransformBuffers(dynamic ? this.renderEntities.dynamic : this.renderEntities.static, dynamic);
+		entityCollection.objects.push(object);
+		this.updateTransformBuffers(entityCollection, dynamic);
 
 		model.update(this.device, this.camera);
-		this.updateTransformBufferData(dynamic ? this.renderEntities.dynamic : this.renderEntities.static);
+		this.updateTransformBufferData(entityCollection);
+
+		return object;
+	}
+
+	/**
+	 * Removes an object from the scene.
+	 * @param object the scene object to be removed.
+	 */
+	public removeObject(object: SceneObject) {
+		if (!object) {
+			return;
+		}
+		const index = this.objects.indexOf(object);
+		if (index < 0) {
+			console.error("Tried to unregister dangling object", object);
+			return;
+		}
+		this.objects.splice(index, 1);
+
+		const entityCollection = object.dynamic ? this.renderEntities.dynamic : this.renderEntities.static;
+		const entityIndex = entityCollection.objects.indexOf(object);
+		if (entityIndex < 0) {
+			console.error("Tried to unregister dangling entity object", object);
+			return;
+		}
+		entityCollection.objects.splice(entityIndex, 1);
+		entityCollection.bufferFreeList.push(object.transformIndex);
 	}
 
 	private buildDebugBuffers() {
@@ -1128,47 +1154,54 @@ export default class Renderer {
 		}
 	}
 
-	private updateTransformBuffers(
-		{
-			transform,
-			objects,
-		}: {
-			transform: TransformBuffer | null;
-			objects: SceneObject[];
-		},
-		dynamic: boolean,
-	) {
-		if (!transform && objects.length === 0) {
-			return;
+	private buildEntityBuffers(): { static: RenderEntityCollection; dynamic: RenderEntityCollection } {
+		const res: any = {};
+		for (const bufferKey of ["static", "dynamic"]) {
+			const collection: RenderEntityCollection = {
+				objects: [],
+				transform: {
+					buffer: this.device.createBuffer({
+						label: `${bufferKey} transform buffer`,
+						size: (DEFAULT_TRANFORM_BUFFER_SIZE as any)[bufferKey]!,
+						usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+					}),
+					data: new Float32Array((DEFAULT_TRANFORM_BUFFER_SIZE as any)[bufferKey]! / 4),
+				},
+				bufferFreeList: [],
+				bufferTailIndex: 0,
+			};
+			res[bufferKey] = collection;
 		}
-		if (transform && transform.data.length * 4 < objects.length * TRANSFORM_BUFFER_SIZE) {
-			for (const [i, object] of objects.entries()) {
+		return res;
+	}
+
+	private updateTransformBuffers(entityCollection: RenderEntityCollection, dynamic: boolean) {
+		if (entityCollection.bufferTailIndex <= entityCollection.transform.buffer.size / TRANSFORM_BUFFER_SIZE) {
+			// transform buffer has enough space to fit the new object
+			for (const object of entityCollection.objects) {
 				if (object.transformBindGroup) {
 					continue;
 				}
-				object.transformIndex = i;
 				object.transformBindGroup = this.device.createBindGroup({
 					layout: this.globalUniformBindGroupLayouts.transform,
 					entries: [
 						{
 							binding: 0,
 							resource: {
-								buffer: transform.buffer,
+								buffer: entityCollection.transform.buffer,
 								offset: object.transformIndex * TRANSFORM_BUFFER_SIZE,
 								size: TRANSFORM_BUFFER_SIZE,
 							},
 						},
 					],
-				})
+				});
 			}
 			return;
 		}
 		// resize the transform buffer, copy any old data, and update the bind groups
-		const transformBufferData = new Float32Array((2 * (objects.length * TRANSFORM_BUFFER_SIZE)) / 4);
-		console.log("setting new buffer data, ", transformBufferData.length);
-		if (transform) {
-			transformBufferData.set(transform.data);
-		}
+		const transformBufferData = new Float32Array(entityCollection.transform.data.length * 2);
+		console.log("setting new buffer data, size", transformBufferData.length);
+		transformBufferData.set(entityCollection.transform.data);
 
 		const transformBuffer: TransformBuffer = {
 			buffer: this.device.createBuffer({
@@ -1178,14 +1211,8 @@ export default class Renderer {
 			}),
 			data: transformBufferData,
 		};
-		if (dynamic) {
-			this.renderEntities.dynamic.transform = transformBuffer;
-		}
-		else {
-			this.renderEntities.static.transform = transformBuffer;
-		}
-		for (const [i, object] of objects.entries()) {
-			object.transformIndex = i;
+		entityCollection.transform = transformBuffer;
+		for (const object of entityCollection.objects) {
 			object.transformBindGroup = this.device.createBindGroup({
 				layout: this.globalUniformBindGroupLayouts.transform,
 				entries: [
@@ -1202,16 +1229,7 @@ export default class Renderer {
 		}
 	}
 
-	private updateTransformBufferData({
-		transform,
-		objects,
-	}: {
-		transform: TransformBuffer | null;
-		objects: SceneObject[];
-	}) {
-		if (!transform) {
-			return;
-		}
+	private updateTransformBufferData({ transform, objects }: RenderEntityCollection) {
 		const stride = TRANSFORM_BUFFER_SIZE / 4;
 		for (const obj of objects) {
 			transform.data.set(obj.model.transform.matrix, obj.transformIndex * stride);
@@ -1880,11 +1898,18 @@ export default class Renderer {
 		// update camera
 		this.camera.update(this.canvas);
 
-		
-
 		// update shadows
 		if (!input.keyDown("c")) {
 			this.updateShadows();
+		}
+
+		if (input.keyPressed("v")) {
+			if (this.models.scene) {
+				this.addObject(this.models.scene, false);
+			}
+		}
+		if (input.keyPressed("b")) {
+			this.removeObject(this.objects[Math.floor(Math.random() * this.objects.length)]);
 		}
 
 		// update uniforms

@@ -24,7 +24,6 @@ export default function loadHDR(url: string, minComponent: number = 1000.0): Pro
 					return response.arrayBuffer();
 				})
 				.then((buffer) => {
-					console.log((performance.now() - startTime).toFixed(2), "ms");
 					try {
 						resolve(read_hdr(new Uint8Array(buffer), minComponent));
 					} catch (e: any) {
