@@ -5,7 +5,8 @@ import { default as shadowShaderSource } from "./shaders/shadows.wgsl";
 import { default as skyboxShaderSource } from "./shaders/skybox.wgsl";
 import { default as ssaoShaderSource } from "./shaders/ssao.wgsl";
 import { default as ssaoBlurShaderSource } from "./shaders/ssao_blur.wgsl";
-import { default as ssaoUpscaleShaderSource } from "./shaders/ssao_upscale.wgsl";
+import { default as upsampleShaderSource } from "./shaders/upsample.wgsl";
+import { default as bloomDownsampleShaderSource } from "./shaders/bloom_downsample.wgsl";
 import { default as postFXShaderSource } from "./shaders/post_fx.wgsl";
 import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
 import { default as irradianceGeneratorSource } from "./shaders/irradiance_gen.wgsl";
@@ -21,7 +22,8 @@ export type Shaders = {
 	skybox: GPUShaderModule;
 	ssao: GPUShaderModule;
 	ssaoBlur: GPUShaderModule;
-	ssaoUpscale: GPUShaderModule;
+	upsample: GPUShaderModule;
+	bloomDownsample: GPUShaderModule;
 	postFX: GPUShaderModule;
 	cubemapGenerator: GPUShaderModule;
 	irradianceGenerator: GPUShaderModule;
@@ -75,9 +77,13 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "ssao blur shader",
 		code: ssaoBlurShaderSource,
 	});
-	const ssaoUpscale = loadShader(device, {
-		label: "ssao upscale shader",
-		code: ssaoUpscaleShaderSource,
+	const upsample = loadShader(device, {
+		label: "upsample shader",
+		code: upsampleShaderSource,
+	});
+	const bloomDownsample = loadShader(device, {
+		label: "bloom downsample shader",
+		code: bloomDownsampleShaderSource,
 	});
 	const postFX = loadShader(device, {
 		label: "post processing shader",
@@ -108,7 +114,8 @@ export function loadShaders(device: GPUDevice): Shaders {
 		skybox: skybox,
 		ssao: ssao,
 		ssaoBlur: ssaoBlur,
-		ssaoUpscale: ssaoUpscale,
+		upsample: upsample,
+		bloomDownsample: bloomDownsample,
 		postFX: postFX,
 		cubemapGenerator: cubemapGenerator,
 		irradianceGenerator: irradianceGenerator,
