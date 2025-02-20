@@ -7,12 +7,20 @@ override fog_start: f32;
 override fog_end: f32;
 override fog_mip_level: f32;
 
+struct TransformData {
+    model_matrix: mat4x4<f32>,
+    normal_matrix: mat3x3<f32>,
+    model_offset: vec3<f32>,
+    model_scale: f32,
+}
+@group(0) @binding(0) var<storage, read> u_transform: array<TransformData>;
+
 struct CameraData {
     view_matrix: mat4x4<f32>,
     proj_matrix: mat4x4<f32>,
     camera_position: vec3<f32>,
 }
-@group(0) @binding(0) var<uniform> u_global: CameraData;
+@group(1) @binding(0) var<uniform> u_global: CameraData;
 struct ShadowData {
     view_matrix: mat4x4<f32>,
     proj_matrix: mat4x4<f32>,
@@ -27,15 +35,7 @@ struct ShadowData {
     align_padding_2: vec4<f32>,
     align_padding_3: mat4x4<f32>,
 }
-@group(0) @binding(2) var<uniform> u_shadow: array<ShadowData, 3>;
-
-struct TransformData {
-    model_matrix: mat4x4<f32>,
-    normal_matrix: mat3x3<f32>,
-    model_offset: vec3<f32>,
-    model_scale: f32,
-}
-@group(1) @binding(0) var<uniform> u_transform: TransformData;
+@group(1) @binding(2) var<uniform> u_shadow: array<ShadowData, 3>;
 
 @group(2) @binding(0) var u_depth_sampler: sampler;
 @group(2) @binding(1) var u_shadowmap: texture_depth_2d_array;
@@ -56,6 +56,7 @@ struct LightingData {
 @group(3) @binding(10) var<uniform> u_shadowmap_kernel:  array<vec4<f32>, TEMPL_shadow_kernel_size>;
 
 struct VertexIn { 
+    @builtin(instance_index) instance: u32,
     @location(0) vertex_xyzc: vec2<u32>,
     @location(1) vertex_normal: u32,
     @location(2) vertex_uv: u32,
@@ -83,10 +84,12 @@ struct FragmentOut {
 
 @vertex 
 fn vs(in: VertexIn) -> VertexOut {
+    let transform: TransformData = u_transform[in.instance];
+
     let x: f32 = f32(in.vertex_xyzc.x >> 16u) / 65535.0 - 0.5;
     let y: f32 = f32(in.vertex_xyzc.x & 0xFFFFu) / 65535.0 - 0.5;
     let z: f32 = f32(in.vertex_xyzc.y >> 16u) / 65535.0 - 0.5;
-    let world_pos: vec4<f32> = u_transform.model_matrix * vec4<f32>(vec3<f32>(x, y, z) * u_transform.model_scale + u_transform.model_offset, 1.0);
+    let world_pos: vec4<f32> = transform.model_matrix * vec4<f32>(vec3<f32>(x, y, z) * transform.model_scale + transform.model_offset, 1.0);
     let view_pos: vec4<f32> = u_global.view_matrix * world_pos;
     let clip_pos: vec4<f32> = u_global.proj_matrix * view_pos;
 
@@ -97,7 +100,7 @@ fn vs(in: VertexIn) -> VertexOut {
     let nx: f32 = f32(in.vertex_normal >> 22u) / 511.5 - 1.0;
     let ny: f32 = f32((in.vertex_normal >> 12u) & 0x3FFu) / 511.5 - 1.0;
     let nz: f32 = f32((in.vertex_normal >> 2u) & 0x3FFu) / 511.5 - 1.0;
-    let normal = u_transform.normal_matrix * vec3<f32>(nx, ny, nz);
+    let normal = transform.normal_matrix * vec3<f32>(nx, ny, nz);
 
     let u: f32 = f32(in.vertex_uv >> 16u) / 65535.0;
     let v: f32 = f32(in.vertex_uv & 0xFFFFu) / 65535.0;
@@ -113,7 +116,7 @@ fn vs(in: VertexIn) -> VertexOut {
     out.view_pos = view_pos;
     out.world_pos = vec3<f32>(world_pos.xyz);
     out.normal = normal;
-    out.view_normal = (u_global.view_matrix * (u_transform.model_matrix * vec4<f32>(normal.xyz, 0.0))).xyz;
+    out.view_normal = (u_global.view_matrix * (transform.model_matrix * vec4<f32>(normal.xyz, 0.0))).xyz;
     out.uv = vec2<f32>(u, v);
     out.screen_uv = (clip_pos.xy / clip_pos.w) * 0.5 + 0.5;
     out.screen_uv.y = 1.0 - out.screen_uv.y;
