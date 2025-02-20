@@ -8,6 +8,7 @@ import { default as ssaoBlurShaderSource } from "./shaders/ssao_blur.wgsl";
 import { default as upsampleShaderSource } from "./shaders/upsample.wgsl";
 import { default as bloomDownsampleShaderSource } from "./shaders/bloom_downsample.wgsl";
 import { default as postFXShaderSource } from "./shaders/post_fx.wgsl";
+import { default as cullingShaderSource } from "./shaders/culling.wgsl";
 import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
 import { default as irradianceGeneratorSource } from "./shaders/irradiance_gen.wgsl";
 import { default as prefilterGeneratorSource } from "./shaders/prefilter_gen.wgsl";
@@ -25,6 +26,7 @@ export type Shaders = {
 	upsample: GPUShaderModule;
 	bloomDownsample: GPUShaderModule;
 	postFX: GPUShaderModule;
+	culling: GPUShaderModule;
 	cubemapGenerator: GPUShaderModule;
 	irradianceGenerator: GPUShaderModule;
 	prefilterGenerator: GPUShaderModule;
@@ -46,9 +48,9 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "pbr shader",
 		code: PBRShaderSource,
 		templates: {
-			"ssao_samples": Math.round(SSAO_SETTINGS.sampleCount).toString(),
-			"shadow_cascades": Math.round(SHADOW_SETTINGS.cascades.length).toString(),
-			"shadow_kernel_size": Math.round(SHADOW_SETTINGS.kernelSize).toString(),
+			ssao_samples: Math.round(SSAO_SETTINGS.sampleCount).toString(),
+			shadow_cascades: Math.round(SHADOW_SETTINGS.cascades.length).toString(),
+			shadow_kernel_size: Math.round(SHADOW_SETTINGS.kernelSize).toString(),
 		},
 	});
 	const depth = loadShader(device, {
@@ -59,8 +61,8 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "shadow pass shader",
 		code: shadowShaderSource,
 		templates: {
-			"shadow_cascades": Math.round(SHADOW_SETTINGS.cascades.length).toString(),
-		}
+			shadow_cascades: Math.round(SHADOW_SETTINGS.cascades.length).toString(),
+		},
 	});
 	const skybox = loadShader(device, {
 		label: "skybox draw shader",
@@ -70,7 +72,7 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "ssao shader",
 		code: ssaoShaderSource,
 		templates: {
-			"ssao_samples": Math.round(SSAO_SETTINGS.sampleCount).toString(),
+			ssao_samples: Math.round(SSAO_SETTINGS.sampleCount).toString(),
 		},
 	});
 	const ssaoBlur = loadShader(device, {
@@ -89,6 +91,10 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "post processing shader",
 		code: postFXShaderSource,
 	});
+	const culling = loadShader(device, {
+		label: "culling compute shader",
+		code: cullingShaderSource,
+	});
 	const cubemapGenerator = loadShader(device, {
 		label: "cubemap generator compute shader",
 		code: cubemapGeneratorSource,
@@ -96,7 +102,7 @@ export function loadShaders(device: GPUDevice): Shaders {
 	const irradianceGenerator = loadShader(device, {
 		label: "irradiance map generator compute shader",
 		code: irradianceGeneratorSource,
-	})
+	});
 	const prefilterGenerator = loadShader(device, {
 		label: "prefilter map generator compute shader",
 		code: prefilterGeneratorSource,
@@ -117,6 +123,7 @@ export function loadShaders(device: GPUDevice): Shaders {
 		upsample: upsample,
 		bloomDownsample: bloomDownsample,
 		postFX: postFX,
+		culling: culling,
 		cubemapGenerator: cubemapGenerator,
 		irradianceGenerator: irradianceGenerator,
 		prefilterGenerator: prefilterGenerator,

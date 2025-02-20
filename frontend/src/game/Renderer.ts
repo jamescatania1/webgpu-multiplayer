@@ -110,6 +110,14 @@ type InstanceCollection = {
 	objects: SceneObject[];
 	instanceBase: number;
 	instanceCount: number;
+	indirectBuffer: GPUBuffer;
+	indirectData: Uint32Array;
+};
+type InstanceClass = {
+	buffer: GPUBuffer;
+	bindGroup: GPUBindGroup;
+	data: Float32Array;
+	count: number;
 };
 
 export default class Renderer {
@@ -149,18 +157,8 @@ export default class Renderer {
 		dynamic: {},
 	};
 	private instances: {
-		static: {
-			buffer: GPUBuffer;
-			bindGroup: GPUBindGroup;
-			data: Float32Array;
-			count: number;
-		};
-		dynamic: {
-			buffer: GPUBuffer;
-			bindGroup: GPUBindGroup;
-			data: Float32Array;
-			count: number;
-		};
+		static: InstanceClass;
+		dynamic: InstanceClass;
 	};
 	private meshes: {
 		[key: string]: ModelData;
@@ -1117,13 +1115,13 @@ export default class Renderer {
 			for (const model of models) {
 				this.meshes[model.name] = model;
 			}
-			this.addObject(this.meshes["/scene.bobj"], "static");
+			// this.addObject(this.meshes["/scene.bobj"], "static");
 			this.updateInstanceBufferData("static");
-			for (let i = 0; i < 5000; i++) {
+			for (let i = 0; i < 1000; i++) {
 				const obj = this.addObject(this.meshes["/monke.bobj"], "dynamic");
-				obj.model.transform.position[0] = Math.random() * 10.0;
-				obj.model.transform.position[1] = Math.random() * 10.0;
-				obj.model.transform.position[2] = Math.random() * 10.0;
+				obj.model.transform.position[0] = (Math.random() - 0.5) * 100.0;
+				obj.model.transform.position[1] = (Math.random() - 0.5) * 100.0;
+				obj.model.transform.position[2] = (Math.random() - 0.5) * 100.0;
 				obj.model.update(this.device, this.camera);
 			}
 
@@ -1146,6 +1144,12 @@ export default class Renderer {
 				instanceBase: instances.count,
 				instanceCount: 0,
 				objects: [],
+				indirectBuffer: this.device.createBuffer({
+					label: `${usage} instance indirect buffer`,
+					size: 20,
+					usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
+				}),
+				indirectData: new Uint32Array(5),
 			};
 			this.models[usage][modelData.name] = collection;
 		} else if (instances.count >= instances.buffer.size / INSTANCE_BUFFER_ENTRY_SIZE) {
@@ -1187,6 +1191,9 @@ export default class Renderer {
 		this.objects.push(object);
 		collection.objects.push(object);
 
+		collection.indirectData.set([modelData.indexCount, collection.instanceCount, 0, 0, collection.instanceBase]);
+		this.device.queue.writeBuffer(collection.indirectBuffer, 0, collection.indirectData);
+
 		model.update(this.device, this.camera);
 		return object;
 	}
@@ -1217,20 +1224,10 @@ export default class Renderer {
 	}
 
 	private buildInstanceBuffers(): {
-		static: {
-			buffer: GPUBuffer;
-			bindGroup: GPUBindGroup;
-			data: Float32Array;
-			count: number;
-		};
-		dynamic: {
-			buffer: GPUBuffer;
-			bindGroup: GPUBindGroup;
-			data: Float32Array;
-			count: number;
-		};
+		static: InstanceClass;
+		dynamic: InstanceClass;
 	} {
-		const res: any = {};
+		const res: { [key: string]: InstanceClass } = {};
 		for (const usage of ["static", "dynamic"]) {
 			const instanceBuffer = this.device.createBuffer({
 				label: `${usage} instance buffer`,
@@ -1258,7 +1255,7 @@ export default class Renderer {
 				count: 0,
 			};
 		}
-		return res;
+		return res as any;
 	}
 
 	private updateInstanceBufferData(usage: "static" | "dynamic") {
@@ -1996,14 +1993,16 @@ export default class Renderer {
 		for (const collection of Object.values(this.models.static)) {
 			pass.setVertexBuffer(0, collection.model.vertexBuffer);
 			pass.setIndexBuffer(collection.model.indexBuffer, collection.model.indexFormat);
-			pass.drawIndexed(collection.model.indexCount, collection.instanceCount, 0, 0, collection.instanceBase);
+			// pass.drawIndexed(collection.model.indexCount, collection.instanceCount, 0, 0, collection.instanceBase);
+			pass.drawIndexedIndirect(collection.indirectBuffer, 0);
 		}
 
 		pass.setBindGroup(0, this.instances.dynamic.bindGroup);
 		for (const collection of Object.values(this.models.dynamic)) {
 			pass.setVertexBuffer(0, collection.model.vertexBuffer);
 			pass.setIndexBuffer(collection.model.indexBuffer, collection.model.indexFormat);
-			pass.drawIndexed(collection.model.indexCount, collection.instanceCount, 0, 0, collection.instanceBase);
+			// pass.drawIndexed(collection.model.indexCount, collection.instanceCount, 0, 0, collection.instanceBase);
+			pass.drawIndexedIndirect(collection.indirectBuffer, 0);
 		}
 	}
 
