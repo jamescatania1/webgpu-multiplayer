@@ -13,7 +13,7 @@ const MOUSE_SENSITIVITY = 2.0;
 
 export const DEBUG_GRAPHICS_TIME = true;
 export const SSAO_SETTINGS = {
-	sampleCount: 32,
+	sampleCount: 24,
 	radius: 0.5,
 	bias: 0.15,
 	kernelDotCutOff: 0.025,
@@ -22,6 +22,12 @@ export const SSAO_SETTINGS = {
 	fadeStart: 60.0,
 	fadeEnd: 70.0,
 	blurKernelSize: 4,
+};
+export const BLOOM_SETTINGS = {
+	levels: 4,
+	intensity: 0.25,
+	threshold: 55.8,
+	softThreshold: 0.0,
 };
 export const SHADOW_SETTINGS = {
 	debugCascades: false,
@@ -62,10 +68,10 @@ export const SUN_SETTINGS = {
 	position: vec3.fromValues(20, 50, -17),
 	direction: vec3.normalize(vec3.fromValues(20, 50, -17)),
 	color: vec3.normalize(vec3.fromValues(1, 240.0 / 255.0, 214.0 / 255.0)),
-	// intensity: 0,
-	intensity: 4.25,
+	intensity: 1.5,
 };
 export const SKY_SETTINGS = {
+	ambientIntensity: 0.75,
 	skyboxSource: "sky",
 	skyboxResolution: 2048,
 	irradianceResolution: 64,
@@ -81,8 +87,7 @@ export const SKY_SETTINGS = {
 	gammaOffset: 0.2,
 };
 export const POSTFX_SETTINGS = {
-	// exposure: 0.725,
-	exposure: 0.325,
+	exposure: 0.525,
 	temperature: 0.2,
 	tint: 0.1,
 	contrast: 1.05,
@@ -119,6 +124,10 @@ export default class Renderer {
 	private readonly uniformBuffers: {
 		camera: GPUBuffer;
 		shadows: GPUBuffer;
+		bloomDownsample: {
+			prefilterEnabled: GPUBuffer;
+			prefilterDisabled: GPUBuffer;
+		};
 	};
 	private readonly uniformBufferData: {
 		camera: Float32Array;
@@ -127,6 +136,8 @@ export default class Renderer {
 	private globalUniformBindGroupLayouts: {
 		camera: GPUBindGroupLayout;
 		shadows: GPUBindGroupLayout;
+		bloomDownsample: GPUBindGroupLayout;
+		upsample: GPUBindGroupLayout;
 		depth: GPUBindGroupLayout;
 		scene: GPUBindGroupLayout;
 		ssao: GPUBindGroupLayout;
@@ -135,6 +146,8 @@ export default class Renderer {
 	private globalUniformBindGroups: {
 		camera: GPUBindGroup | null;
 		shadows: GPUBindGroup[];
+		bloomDownsample: GPUBindGroup[] | null;
+		bloomUpsample: GPUBindGroup[] | null;
 		depth: GPUBindGroup | null;
 		scene: GPUBindGroup | null;
 		ssao: GPUBindGroup | null;
@@ -154,6 +167,8 @@ export default class Renderer {
 		ssaoBlurX: GPUComputePipeline;
 		ssaoBlurY: GPUComputePipeline;
 		ssaoUpscale: GPUComputePipeline;
+		bloomDownsample: GPUComputePipeline;
+		bloomUpsample: GPUComputePipeline;
 	};
 	private renderPassDescriptors: {
 		depthPass: GPURenderPassDescriptor;
@@ -166,10 +181,16 @@ export default class Renderer {
 		ssaoBlurX: GPUComputePassDescriptor;
 		ssaoBlurY: GPUComputePassDescriptor;
 		ssaoUpscale: GPUComputePassDescriptor;
+		bloomDownsample: GPUComputePassDescriptor[];
+		bloomUpsample: GPUComputePassDescriptor[];
 	};
 	private shadowData: {
 		texture: GPUTexture | null;
 	};
+	private bloomLevels: {
+		width: number;
+		height: number;
+	}[] = [];
 	private readonly presentationFormat: GPUTextureFormat;
 
 	private readonly shaders: Shaders;
@@ -385,6 +406,71 @@ export default class Renderer {
 				},
 			],
 		});
+		const bloomDownsampleBindGroupLayout = this.device.createBindGroupLayout({
+			label: "bloom downsample bind group layout",
+			entries: [
+				{
+					binding: 0,
+					visibility: GPUShaderStage.COMPUTE,
+					texture: {
+						viewDimension: "2d",
+						multisampled: false,
+						sampleType: "float",
+					},
+				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.COMPUTE,
+					sampler: {
+						type: "filtering",
+					},
+				},
+				{
+					binding: 2,
+					visibility: GPUShaderStage.COMPUTE,
+					storageTexture: {
+						access: "write-only",
+						format: "rgba16float",
+						viewDimension: "2d",
+					},
+				},
+				{
+					binding: 3,
+					visibility: GPUShaderStage.COMPUTE,
+					buffer: {},
+				},
+			],
+		});
+		const upsampleBindGroupLayout = this.device.createBindGroupLayout({
+			label: "bloom downsample bind group layout",
+			entries: [
+				{
+					binding: 0,
+					visibility: GPUShaderStage.COMPUTE,
+					texture: {
+						viewDimension: "2d",
+						multisampled: false,
+						sampleType: "float",
+					},
+				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.COMPUTE,
+					sampler: {
+						type: "filtering",
+					},
+				},
+				{
+					binding: 2,
+					visibility: GPUShaderStage.COMPUTE,
+					storageTexture: {
+						access: "write-only",
+						format: "rgba16float",
+						viewDimension: "2d",
+					},
+				},
+			],
+		});
 		const transformBindGroupLayout = this.device.createBindGroupLayout({
 			label: "transform bind group layout",
 			entries: [
@@ -404,6 +490,8 @@ export default class Renderer {
 			depth: depthBindGroupLayout,
 			scene: sceneBindGroupLayout,
 			ssao: ssaoBindGroupLayout,
+			bloomDownsample: bloomDownsampleBindGroupLayout,
+      upsample: upsampleBindGroupLayout,
 			transform: transformBindGroupLayout,
 		};
 
@@ -547,6 +635,7 @@ export default class Renderer {
 				constants: {
 					near: this.camera.near,
 					// far: this.camera.far,
+					ambient_intensity: SKY_SETTINGS.ambientIntensity,
 					debug_cascades: SHADOW_SETTINGS.debugCascades ? 1 : 0,
 					shadow_fade_distance: SHADOW_SETTINGS.fadeDistance,
 					fog_start: SKY_SETTINGS.fogStart,
@@ -593,6 +682,7 @@ export default class Renderer {
 				targets: [{ format: this.presentationFormat }],
 				constants: {
 					...POSTFX_SETTINGS,
+					bloom_intensity: BLOOM_SETTINGS.intensity,
 				},
 			},
 			primitive: {
@@ -657,10 +747,39 @@ export default class Renderer {
 			label: "ssao upscale compute pipeline",
 			layout: "auto",
 			compute: {
-				module: this.shaders.ssaoUpscale,
-				entryPoint: "compute_ssao_upscale",
+				module: this.shaders.upsample,
+				entryPoint: "compute_upsample",
 			},
 		});
+		const bloomDownsamplePipelineLayout = this.device.createPipelineLayout({
+			label: "bloom downsample layout",
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.bloomDownsample],
+		});
+		const bloomDownsamplePipeline = this.device.createComputePipeline({
+			label: "bloom downsample compute pipeline",
+			layout: bloomDownsamplePipelineLayout,
+			compute: {
+				module: this.shaders.bloomDownsample,
+				entryPoint: "compute_downsample",
+				constants: {
+					threshold: BLOOM_SETTINGS.threshold,
+					soft_threshold: BLOOM_SETTINGS.softThreshold,
+				}
+			},
+		});
+		const bloomUpsamplePipelineLayout = this.device.createPipelineLayout({
+			label: "bloom upsample layout",
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.upsample],
+		});
+		const bloomUpsamplePipeline = this.device.createComputePipeline({
+			label: "bloom upsample compute pipeline",
+			layout: bloomUpsamplePipelineLayout,
+			compute: {
+				module: this.shaders.upsample,
+				entryPoint: "compute_upsample",
+			},
+		});
+
 		this.pipelines = {
 			depth: depthPrepassRenderPipeline,
 			shadows: shadowDepthRenderPipeline,
@@ -670,6 +789,8 @@ export default class Renderer {
 			ssaoBlurX: ssaoBlurXComputePipeline,
 			ssaoBlurY: ssaoBlurYComputePipeline,
 			ssaoUpscale: ssaoUpscalePipeline,
+			bloomDownsample: bloomDownsamplePipeline,
+			bloomUpsample: bloomUpsamplePipeline,
 		};
 
 		const cascadeBufferSizeBytes = 256;
@@ -684,6 +805,20 @@ export default class Renderer {
 				size: SHADOW_SETTINGS.cascades.length * cascadeBufferSizeBytes,
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			}),
+			bloomDownsample: {
+				prefilterEnabled: this.device.createBuffer({
+					label: "bloom downsample filter-enabled buffer",
+					size: 4,
+					usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+					mappedAtCreation: true,
+				}),
+				prefilterDisabled: this.device.createBuffer({
+					label: "bloom downsample filter-disabled buffer",
+					size: 4,
+					usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+					mappedAtCreation: true,
+				}),
+			},
 		};
 		this.uniformBufferData = {
 			camera: new Float32Array(this.uniformBuffers.camera.size / 4),
@@ -699,6 +834,11 @@ export default class Renderer {
 				transform: null,
 			},
 		};
+
+		new Int32Array(this.uniformBuffers.bloomDownsample.prefilterEnabled.getMappedRange())[0] = 1;
+		this.uniformBuffers.bloomDownsample.prefilterEnabled.unmap();
+		new Int32Array(this.uniformBuffers.bloomDownsample.prefilterDisabled.getMappedRange())[0] = 0;
+		this.uniformBuffers.bloomDownsample.prefilterDisabled.unmap();
 
 		const cameraBindGroup = this.device.createBindGroup({
 			layout: this.globalUniformBindGroupLayouts.camera,
@@ -824,6 +964,8 @@ export default class Renderer {
 			ssaoBlurX: null,
 			ssaoBlurY: null,
 			ssaoUpscale: null,
+			bloomDownsample: null,
+			bloomUpsample: null,
 			drawTexture: null,
 		};
 
@@ -892,7 +1034,17 @@ export default class Renderer {
 			ssaoUpscale: {
 				label: "SSAO Upscale Pass",
 			},
+			bloomDownsample: [],
+			bloomUpsample: [],
 		};
+		for (let i = 0; i < BLOOM_SETTINGS.levels; i++) {
+			this.computePassDescriptors.bloomDownsample.push({
+				label: `Bloom Downsample Pass ${i}`,
+			});
+			this.computePassDescriptors.bloomUpsample.push({
+				label: `Bloom Upsample Pass ${i}`,
+			});
+		}
 
 		if (context.timestampQuery) {
 			this.buildDebugBuffers();
@@ -1161,6 +1313,26 @@ export default class Renderer {
 		});
 		const screenOutputView = screenOutputTexture.createView();
 
+		// bloom textures
+		this.bloomLevels = [];
+		let bloomTextureSize = [this.canvas.width, this.canvas.height];
+		for (let i = 0; i <= BLOOM_SETTINGS.levels; i++) {
+			this.bloomLevels.push({
+				width: bloomTextureSize[0],
+				height: bloomTextureSize[1],
+			});
+			bloomTextureSize = [Math.ceil(bloomTextureSize[0] / 2), Math.ceil(bloomTextureSize[1] / 2)];
+		}
+		const bloomTexture = this.device.createTexture({
+			label: "bloom texture",
+			size: [this.canvas.width, this.canvas.height],
+			sampleCount: 1,
+			format: "rgba16float",
+			dimension: "2d",
+			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+			mipLevelCount: BLOOM_SETTINGS.levels + 1,
+		});
+
 		const depthUniformScreenSizeBuffer = this.device.createBuffer({
 			size: 2 * 4,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -1216,7 +1388,14 @@ export default class Renderer {
 				{
 					binding: 1,
 					resource: sceneResolveView,
-					// resource: ssaoUpscaleTexture.createView(),
+				},
+				{
+					binding: 2,
+					resource: bloomTexture.createView({
+						dimension: "2d",
+						baseMipLevel: 0,
+						mipLevelCount: 1,
+					}),
 				},
 			],
 		});
@@ -1240,7 +1419,7 @@ export default class Renderer {
 			],
 		});
 
-		const ssaoSampler = this.device.createSampler({
+		const filterSampler = this.device.createSampler({
 			minFilter: "linear",
 			magFilter: "linear",
 			addressModeU: "clamp-to-edge",
@@ -1257,7 +1436,7 @@ export default class Renderer {
 				},
 				{
 					binding: 1,
-					resource: ssaoSampler,
+					resource: filterSampler,
 				},
 				{
 					binding: 2,
@@ -1276,7 +1455,7 @@ export default class Renderer {
 				},
 				{
 					binding: 1,
-					resource: ssaoSampler,
+					resource: filterSampler,
 				},
 				{
 					binding: 2,
@@ -1295,7 +1474,7 @@ export default class Renderer {
 				},
 				{
 					binding: 1,
-					resource: ssaoSampler,
+					resource: filterSampler,
 				},
 				{
 					binding: 2,
@@ -1303,6 +1482,78 @@ export default class Renderer {
 				},
 			],
 		});
+
+		this.globalUniformBindGroups.bloomDownsample = [];
+		this.globalUniformBindGroups.bloomUpsample = [];
+		for (let i = 0; i < BLOOM_SETTINGS.levels; i++) {
+			const bloomDownsampleBindGroup = this.device.createBindGroup({
+				layout: this.globalUniformBindGroupLayouts.bloomDownsample,
+				entries: [
+					{
+						binding: 0,
+						resource:
+							i > 0
+								? bloomTexture.createView({
+										dimension: "2d",
+										baseMipLevel: i,
+										mipLevelCount: 1,
+									})
+								: sceneResolveView,
+					},
+					{
+						binding: 1,
+						resource: filterSampler,
+					},
+					{
+						binding: 2,
+						resource: bloomTexture.createView({
+							dimension: "2d",
+							baseMipLevel: i + 1,
+							mipLevelCount: 1,
+						}),
+					},
+					{
+						binding: 3,
+						resource: {
+							buffer:
+								i === 0
+									? this.uniformBuffers.bloomDownsample.prefilterEnabled
+									: this.uniformBuffers.bloomDownsample.prefilterDisabled,
+							offset: 0,
+							size: 4,
+						},
+					},
+				],
+			});
+			this.globalUniformBindGroups.bloomDownsample.push(bloomDownsampleBindGroup);
+
+			const bloomUpsampleBindGroup = this.device.createBindGroup({
+				layout: this.globalUniformBindGroupLayouts.upsample,
+				entries: [
+					{
+						binding: 0,
+						resource: bloomTexture.createView({
+							dimension: "2d",
+							baseMipLevel: i + 1,
+							mipLevelCount: 1,
+						}),
+					},
+					{
+						binding: 1,
+						resource: filterSampler,
+					},
+					{
+						binding: 2,
+						resource: bloomTexture.createView({
+							dimension: "2d",
+							baseMipLevel: i,
+							mipLevelCount: 1,
+						}),
+					},
+				],
+			});
+			this.globalUniformBindGroups.bloomUpsample.push(bloomUpsampleBindGroup);
+		}
 
 		// update render pass descriptor textures
 		(this.renderPassDescriptors.depthPass as any).depthStencilAttachment = {
@@ -1756,6 +2007,34 @@ export default class Renderer {
 				drawPass.drawIndexed(36);
 			}
 			drawPass.end();
+		}
+
+		if (this.globalUniformBindGroups.bloomDownsample && this.globalUniformBindGroups.bloomUpsample) {
+			// bloom downsample pass
+			for (let i = 0; i < BLOOM_SETTINGS.levels; i++) {
+				const bloomPass = encoder.beginComputePass(this.computePassDescriptors.bloomDownsample[i]);
+				bloomPass.setPipeline(this.pipelines.bloomDownsample);
+				bloomPass.setBindGroup(0, this.globalUniformBindGroups.bloomDownsample[i]);
+				bloomPass.dispatchWorkgroups(
+					Math.ceil(this.bloomLevels[i + 1].width / 8),
+					Math.ceil(this.bloomLevels[i + 1].height / 8),
+					1,
+				);
+				bloomPass.end();
+			}
+
+			// bloom upsample pass
+			for (let i = BLOOM_SETTINGS.levels - 1; i >= 0; i--) {
+				const bloomPass = encoder.beginComputePass(this.computePassDescriptors.bloomUpsample[i]);
+				bloomPass.setPipeline(this.pipelines.bloomUpsample);
+				bloomPass.setBindGroup(0, this.globalUniformBindGroups.bloomUpsample[i]);
+				bloomPass.dispatchWorkgroups(
+					Math.ceil(this.bloomLevels[i].width / 8),
+					Math.ceil(this.bloomLevels[i].height / 8),
+					1,
+				);
+				bloomPass.end();
+			}
 		}
 
 		{

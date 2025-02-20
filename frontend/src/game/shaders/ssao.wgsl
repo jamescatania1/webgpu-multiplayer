@@ -4,7 +4,7 @@ override ssao_bias: f32;
 override ssao_noise_scale: f32;
 override ssao_fade_start: f32;
 override ssao_fade_end: f32;
-// override near: f32;
+override near: f32;
 // override far: f32;
 
 @group(0) @binding(0) var u_depth: texture_depth_multisampled_2d;
@@ -59,7 +59,9 @@ fn compute_ssao(in: ComputeIn) {
         
         var offset: vec4<f32> = u_camera.proj_matrix * vec4<f32>(sample_pos, 1.0);
         offset = (offset / offset.w) * 0.5 + 0.5;
-        // offset.y = 1.0 - offset.y;
+        if (offset.x < 0.0 || offset.x > 1.0 || offset.y < 0.0 || offset.y > 1.0) {
+            continue;
+        }
 
         let pixel_coords: vec2<i32> = vec2<i32>(offset.xy * depth_dimensions);
         let sample_depth: f32 = view_position(pixel_coords).z;
@@ -69,7 +71,6 @@ fn compute_ssao(in: ComputeIn) {
         if (d_z > ssao_bias) {
             occlusion += 1.0 * range_check;
         }
-        // occlusion += f32(offset.x);
     }
     occlusion /= f32(ssao_samples);
     occlusion *= (1.0 - smoothstep(0.0, 1.0, max(0.0, (view_pos.z - ssao_fade_start) / (ssao_fade_end - ssao_fade_start))));

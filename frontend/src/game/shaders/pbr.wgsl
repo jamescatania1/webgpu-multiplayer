@@ -1,5 +1,6 @@
 override near: f32;
 override far: f32;
+override ambient_intensity: f32;
 override debug_cascades: bool;
 override shadow_fade_distance: f32;
 override fog_start: f32;
@@ -304,14 +305,14 @@ fn fs(in: VertexOut) -> FragmentOut {
         let diffuse: vec3<f32> = k_d * irradiance * albedo;
 
         let specular_irradiance: vec3<f32> = textureSampleLevel(u_prefilter, u_scene_sampler, l_r, rough * 4.0).rgb;
-        let brdf: vec2<f32> = textureSample(u_brdf, u_scene_sampler, vec2<f32>(cos_lo, rough)).rg;
+        let brdf: vec2<f32> = textureSample(u_brdf, u_scene_sampler, vec2<f32>(clamp(cos_lo, 0.01, 0.99), rough)).rg;
         let specular: vec3<f32> = specular_irradiance * (f_0 * brdf.x + brdf.y);
         ambient = diffuse + specular;
     }
 
     // SSAO
     let occlusion: f32 = 1.0 - textureSample(u_ssao, u_scene_sampler, in.pos.xy / u_screen_size).r;
-    light += ambient;
+    light += ambient * ambient_intensity;
 
 
     var color: vec3<f32> = light;
@@ -332,14 +333,8 @@ fn fs(in: VertexOut) -> FragmentOut {
         color = mix(color, visualize_cascades(in), 0.75);
     }
 
-    // var view_normal: vec3<f32> = in.view_pos.xyz / in.view_pos.w;
-    // view_normal = cross(dpdyFine(view_normal), dpdxFine(view_normal));
-    // view_normal = normalize(normalize(-view_normal) - normalize(in.view_normal));
-    // view_normal = normalize(in.view_normal);
-
     var out: FragmentOut;
     out.color = vec4<f32>(color * occlusion, 1.0);
-    // out.color = vec4<f32>(color * 0.00001 + occlusion, 1.0);
     out.occlusion = vec4<f32>(color, 1.0);
     return out;
 }

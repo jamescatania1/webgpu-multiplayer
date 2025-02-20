@@ -1,4 +1,4 @@
-override sample_count: u32 = 2048;
+override sample_count: u32 = 2048u;
 
 @group(0) @binding(0) var u_cubemap: texture_cube<f32>;
 @group(0) @binding(1) var u_cubemap_sampler: sampler;
@@ -23,7 +23,7 @@ fn compute_prefilter(in: ComputeIn) {
 
     var weight: f32 = 0.0;
     var prefiltered_color = vec3<f32>(0.0);
-    for (var i: u32 = 0; i < sample_count; i++) {
+    for (var i: u32 = 0u; i < sample_count; i++) {
         let x_i: vec2<f32> = hammersley(i);
         let h: vec3<f32> = importance_sample_ggx(x_i, n);
         let l: vec3<f32> = normalize(2.0 * dot(v, h) * h - v);
@@ -35,7 +35,7 @@ fn compute_prefilter(in: ComputeIn) {
     }
     prefiltered_color /= weight;
     
-    textureStore(u_prefilter, in.id.xy, in.id.z, vec4<f32>(prefiltered_color, 1.0));
+    textureStore(u_prefilter, vec2<i32>(in.id.xy), in.id.z, vec4<f32>(prefiltered_color, 1.0));
 }
 
 fn rad_inverse_vdc(x: u32) -> f32 {
@@ -74,22 +74,22 @@ fn world_pos(cubemap_pos: vec3<u32>, cubemap_dim: vec2<f32>) -> vec3<f32> {
     let u: f32 = (f32(cubemap_pos.x) / f32(cubemap_dim.x)) * 2.0 - 1.0;
     let v: f32 = (f32(cubemap_pos.y) / f32(cubemap_dim.y)) * 2.0 - 1.0;
     switch cubemap_pos.z {
-        case 0: { // right
+        case 0u: { // right
             return vec3<f32>(1.0, -v, -u); 
         }
-        case 1: { // left
+        case 1u: { // left
             return vec3<f32>(-1.0, -v, u);
         }
-        case 2: { // top
+        case 2u: { // top
             return vec3<f32>(u, 1.0, v);
         }
-        case 3: { // bottom
+        case 3u: { // bottom
             return vec3<f32>(u, -1.0, -v);
         }
-        case 4: { // back
+        case 4u: { // back
             return vec3<f32>(u, -v, 1.0);
         }
-        case 5: { // front
+        case 5u: { // front
             return vec3<f32>(-u, -v, -1.0);
         }
         default: {
