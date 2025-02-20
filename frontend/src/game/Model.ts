@@ -1,8 +1,9 @@
 import { vec3, type Vec3 } from "wgpu-matrix";
 import Transform from "./Transform";
 import type Camera from "./Camera";
+import { TRANSFORM_BUFFER_SIZE, type TransformBuffer } from "./Renderer";
 
-type ModelData = {
+export type ModelData = {
 	vertexBuffer: GPUBuffer;
 	vertexCount: number;
 	indexBuffer: GPUBuffer;
@@ -30,55 +31,19 @@ enum ModelReadState {
 
 export default class Model {
 	public readonly modelData: ModelData;
-	private readonly transformUniformBuffer: GPUBuffer;
-	public readonly transformUniformBindGroup: GPUBindGroup;
 	public readonly transform: Transform;
-	private readonly transformBufferData: Float32Array;
 	public metallic = 0.0;
 	public roughness = 1.0;
 	public ao = 1.0;
 
-	constructor(device: GPUDevice, camera: Camera, transformBindGroupLayout: GPUBindGroupLayout, modelData: ModelData) {
+	constructor(device: GPUDevice, camera: Camera, modelData: ModelData) {
 		this.modelData = modelData;
 		this.transform = new Transform(camera);
-		this.transformBufferData = new Float32Array((16 + 12 + 4) * 4);
-
-		// uniform buffer and bind group for the transform
-		this.transformUniformBuffer = device.createBuffer({
-			size: (16 + 12 + 4) * 4 * 4,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-		});
-		this.transformUniformBindGroup = device.createBindGroup({
-			layout: transformBindGroupLayout,
-			entries: [
-				{
-					binding: 0,
-					resource: {
-						buffer: this.transformUniformBuffer,
-					},
-				},
-			],
-		});
-
 		this.update(device, camera);
 	}
 
 	public update(device: GPUDevice, camera: Camera) {
-		if (!this.modelData) {
-			return;
-		}
 		this.transform.update(camera);
-		this.transformBufferData.set(this.transform.matrix, 0);
-		this.transformBufferData.set(this.transform.normalMatrix, 16);
-		this.transformBufferData.set(this.modelData.offset, 16 + 12);
-		this.transformBufferData[16 + 12 + 3] = 1.0 / this.modelData.scale;
-		device.queue.writeBuffer(
-			this.transformUniformBuffer,
-			0,
-			this.transformBufferData.buffer,
-			this.transformBufferData.byteOffset,
-			this.transformBufferData.byteLength,
-		);
 	}
 }
 

@@ -26,7 +26,7 @@ type SceneData = {
 };
 
 export default class Sky {
-	private readonly debug = true;
+	private readonly debug = false;
 
 	public skyboxRenderData: SkyboxRenderData | null = null;
 	public sceneRenderData: SceneData | null = null;

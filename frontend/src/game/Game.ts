@@ -10,6 +10,12 @@ export type RenderContext = {
 	timestampQuery: boolean;
 };
 
+if (import.meta.hot) {
+	import.meta.hot.on("game reload", (message) => {
+		console.log(message);
+	});
+}
+
 export default class Game {
 	private input: Input;
 	private worker: Worker;
@@ -36,7 +42,7 @@ export default class Game {
 				renderer = new Renderer(canvas, ctx);
 
 				if (renderer.timestampData) {
-					this.graphicsTime = {...renderer.timestampData.data};
+					this.graphicsTime = { ...renderer.timestampData.data };
 				}
 
 				// main draw loop
@@ -58,7 +64,7 @@ export default class Game {
 							this.graphicsTime[key] += renderer.timestampData!.data[key];
 						}
 					}
-					this.statsPollCount += 1;
+					this.statsPollCount++;
 					if (endTime - this.statsPollStart > 250) {
 						const frameStats: { [key: string]: number } = {};
 						if (this.graphicsTime) {
@@ -110,9 +116,9 @@ export default class Game {
 			timestampQuery = false;
 			console.error("Device is unable to time graphics operations, disabling debug graphics stats.");
 		}
-		const device = await (timestampQuery ?
-			adapter.requestDevice({ requiredFeatures: ["timestamp-query"] }) :
-			adapter.requestDevice());
+		const device = await (timestampQuery
+			? adapter.requestDevice({ requiredFeatures: ["timestamp-query"] })
+			: adapter.requestDevice());
 		if (!device) {
 			throw new Error("WebGPU not supported on this browser");
 		}
