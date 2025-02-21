@@ -2,9 +2,9 @@ import { mat4, vec3, vec4, type Mat4, type Vec4 } from "wgpu-matrix";
 import { SHADOW_SETTINGS, SUN_SETTINGS } from "./Renderer";
 
 type CascadeTransform = {
-	view: Mat4,
-	proj: Mat4,
-}
+	view: Mat4;
+	proj: Mat4;
+};
 
 export default class Camera {
 	public position = vec3.create();
@@ -24,6 +24,14 @@ export default class Camera {
 	public readonly viewProjMatrix = mat4.create();
 	public readonly rotProjMatrix = mat4.create();
 	public readonly cascadeMatrices: CascadeTransform[];
+	public readonly frustum = {
+		near: { normal: vec3.create(), point: vec3.create(), distance: 0 },
+		far: { normal: vec3.create(), point: vec3.create(), distance: 0 },
+		left: { normal: vec3.create(), point: vec3.create(), distance: 0 },
+		right: { normal: vec3.create(), point: vec3.create(), distance: 0 },
+		bottom: { normal: vec3.create(), point: vec3.create(), distance: 0 },
+		top: { normal: vec3.create(), point: vec3.create(), distance: 0 },
+	};
 
 	// used to build the shadow camera matrices
 	private readonly clipCorners: Vec4[] = [
@@ -54,6 +62,8 @@ export default class Camera {
 	private readonly shadowOrigin = vec4.create();
 	private readonly roundedOrigin = vec4.create();
 	private readonly roundedOffset = vec4.create();
+	private readonly minComponents = vec3.create();
+	private readonly maxComponents = vec3.create();
 
 	constructor(canvas: HTMLCanvasElement) {
 		this.position[1] = 2.0;
@@ -92,14 +102,67 @@ export default class Camera {
 			vec3.copy(this.position, this.stablePosition);
 		}
 
-		mat4.lookAt(this.stablePosition, vec3.add(this.stablePosition, this.forward, vec3.create()), this.up, this.stableViewMatrix);
+		mat4.lookAt(
+			this.stablePosition,
+			vec3.add(this.stablePosition, this.forward, vec3.create()),
+			this.up,
+			this.stableViewMatrix,
+		);
 
 		mat4.lookAt(vec3.create(), this.forward, this.up, this.rotProjMatrix);
 		mat4.mul(this.projMatrix, this.rotProjMatrix, this.rotProjMatrix);
 	}
 
-	private readonly minComponents = vec3.create();
-	private readonly maxComponents = vec3.create();
+	public updateFrustum(canvas: HTMLCanvasElement) {
+		vec3.addScaled(this.position, this.forward, this.near, this.frustum.near.point);
+		this.frustum.near.normal.set(this.forward);
+		vec3.normalize(this.frustum.near.normal, this.frustum.near.normal);
+		this.frustum.near.distance = vec3.dot(this.frustum.near.normal, this.frustum.near.point)
+
+		vec3.addScaled(this.position, this.forward, this.far, this.frustum.far.point);
+		vec3.negate(this.forward, this.frustum.far.normal);
+		vec3.normalize(this.frustum.far.normal, this.frustum.far.normal);
+		this.frustum.far.distance = vec3.dot(this.frustum.far.normal, this.frustum.far.point)
+
+		const vSideDistance = this.far * Math.tan((this.fov * Math.PI) / 360);
+		const hSideDistance = vSideDistance * (canvas.width / canvas.height);
+
+		this.frustum.left.point.set(this.position);
+		vec3.cross(
+			this.up,
+			vec3.addScaled(vec3.scale(this.forward, this.far), this.right, hSideDistance),
+			this.frustum.left.normal,
+		);
+		vec3.normalize(this.frustum.left.normal, this.frustum.left.normal);
+		this.frustum.left.distance = vec3.dot(this.frustum.left.normal, this.frustum.left.point)
+
+		this.frustum.right.point.set(this.position);
+		vec3.cross(
+			vec3.addScaled(vec3.scale(this.forward, this.far), this.right, -hSideDistance),
+			this.up,
+			this.frustum.right.normal,
+		);
+		vec3.normalize(this.frustum.right.normal, this.frustum.right.normal);
+		this.frustum.right.distance = vec3.dot(this.frustum.right.normal, this.frustum.right.point)
+
+		this.frustum.top.point.set(this.position);
+		vec3.cross(
+			this.right,
+			vec3.addScaled(vec3.scale(this.forward, this.far), this.up, -vSideDistance),
+			this.frustum.top.normal,
+		);
+		vec3.normalize(this.frustum.top.normal, this.frustum.top.normal);
+		this.frustum.top.distance = vec3.dot(this.frustum.top.normal, this.frustum.top.point)
+		
+		this.frustum.bottom.point.set(this.position);
+		vec3.cross(
+			vec3.addScaled(vec3.scale(this.forward, this.far), this.up, vSideDistance),
+			this.right,
+			this.frustum.bottom.normal,
+		);
+		vec3.normalize(this.frustum.bottom.normal, this.frustum.bottom.normal);
+		this.frustum.bottom.distance = vec3.dot(this.frustum.bottom.normal, this.frustum.bottom.point)
+	}
 
 	public updateShadows(canvas: HTMLCanvasElement) {
 		for (let c = 0; c < SHADOW_SETTINGS.cascades.length; c++) {
@@ -132,27 +195,6 @@ export default class Camera {
 			vec3.add(this.center, SUN_SETTINGS.direction, this.shadowEye);
 			mat4.lookAt(this.shadowEye, this.center, this.up, this.cascadeMatrices[c].view);
 
-			// const minOrtho = vec3.fromValues(-radius, -radius, -radius);
-			// const maxOrtho = vec3.fromValues(radius, radius, radius);
-			// vec3.add(this.center, minOrtho, minOrtho);
-			// vec3.add(this.center, maxOrtho, maxOrtho);
-
-			// const minComponents = mat4.multiply(this.cascadeMatrices[c].view, vec4.fromValues(minOrtho[0], minOrtho[1], minOrtho[2], 1.0));
-			// const maxComponents = mat4.multiply(this.cascadeMatrices[c].view, vec4.fromValues(maxOrtho[0], maxOrtho[1], maxOrtho[2], 1.0));
-			
-			// const near = minComponents[2] * (minComponents[2] < 0 ? 10.0 : 0.1);
-			// const far = maxComponents[2] * (maxComponents[2] < 0 ? 0.1 : 10.0);
-			// mat4.ortho(
-			// 	-radius,
-			// 	radius,
-			// 	-radius,
-			// 	radius,
-			// 	near,
-			// 	far,
-			// 	this.cascadeMatrices[c].proj,
-			// );
-			
-	
 			vec3.set(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE, this.minComponents);
 			vec3.set(-Number.MAX_VALUE, -Number.MAX_VALUE, -Number.MAX_VALUE, this.maxComponents);
 			for (const corner of this.corners) {
@@ -162,11 +204,11 @@ export default class Camera {
 					this.maxComponents[k] = Math.max(this.maxComponents[k], corner[k]);
 				}
 			}
-	
+
 			const shadowZMultiplier = 10.0;
 			this.minComponents[2] *= this.minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier;
 			this.maxComponents[2] *= this.maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier;
-	
+
 			mat4.ortho(
 				this.minComponents[0],
 				this.maxComponents[0],

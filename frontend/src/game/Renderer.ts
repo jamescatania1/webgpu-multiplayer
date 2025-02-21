@@ -297,6 +297,11 @@ export default class Renderer {
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: {},
 				},
+				{
+					binding: 3,
+					visibility: GPUShaderStage.COMPUTE,
+					buffer: {},
+				},
 			],
 		});
 		const shadowsBindGroupLayout = this.device.createBindGroupLayout({
@@ -525,7 +530,7 @@ export default class Renderer {
 					visibility: GPUShaderStage.VERTEX,
 					buffer: {
 						type: "read-only-storage",
-					}
+					},
 				},
 			],
 		});
@@ -545,15 +550,15 @@ export default class Renderer {
 					visibility: GPUShaderStage.COMPUTE,
 					buffer: {
 						type: "storage",
-					}
+					},
 				},
 				{
 					binding: 2,
 					visibility: GPUShaderStage.COMPUTE,
 					buffer: {
 						type: "storage",
-					}
-				}
+					},
+				},
 			],
 		});
 		this.globalUniformBindGroupLayouts = {
@@ -854,7 +859,10 @@ export default class Renderer {
 		});
 		const cullPipelineLayout = this.device.createPipelineLayout({
 			label: "culling layout",
-			bindGroupLayouts: [this.globalUniformBindGroupLayouts.instanceCulling],
+			bindGroupLayouts: [
+				this.globalUniformBindGroupLayouts.instanceCulling,
+				this.globalUniformBindGroupLayouts.camera,
+			],
 		});
 		const cullPipeline = this.device.createComputePipeline({
 			label: "culling pipeline",
@@ -862,7 +870,7 @@ export default class Renderer {
 			compute: {
 				module: this.shaders.culling,
 				entryPoint: "compute_culling",
-			}
+			},
 		});
 
 		this.pipelines = {
@@ -883,7 +891,7 @@ export default class Renderer {
 		this.uniformBuffers = {
 			camera: this.device.createBuffer({
 				label: "camera uniform buffer",
-				size: 256 + 64,
+				size: 512 + 24 * 4,
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			}),
 			shadows: this.device.createBuffer({
@@ -941,6 +949,14 @@ export default class Renderer {
 						buffer: this.uniformBuffers.shadows,
 						offset: 0,
 						size: this.uniformBuffers.shadows.size,
+					},
+				},
+				{
+					binding: 3,
+					resource: {
+						buffer: this.uniformBuffers.camera,
+						offset: 512,
+						size: 24 * 4,
 					},
 				},
 			],
@@ -1197,8 +1213,10 @@ export default class Renderer {
 	public addObject(modelData: ModelData, usage: "static" | "dynamic"): SceneObject {
 		let collection = this.models[usage][modelData.name];
 		if (!collection || collection.instanceCount >= collection.instanceBuffer.size / INSTANCE_BUFFER_ENTRY_SIZE) {
-			let instanceBufferSize = collection ? collection.instanceBuffer.size * 2 : (DEFAULT_INSTANCE_BUFFER_SIZE as any)[usage];
-			
+			let instanceBufferSize = collection
+				? collection.instanceBuffer.size * 2
+				: (DEFAULT_INSTANCE_BUFFER_SIZE as any)[usage];
+
 			const instanceBuffer = this.device.createBuffer({
 				label: `${usage} ${modelData.name} instance buffer`,
 				size: instanceBufferSize,
@@ -1208,16 +1226,18 @@ export default class Renderer {
 			if (collection) {
 				instanceData.set(collection.instanceData);
 			}
-			const cullBuffer =  this.device.createBuffer({
+			const cullBuffer = this.device.createBuffer({
 				label: `${usage} ${modelData.name} instance cull buffer`,
 				size: (instanceBufferSize / INSTANCE_BUFFER_ENTRY_SIZE) * 4,
 				usage: GPUBufferUsage.STORAGE,
 			});
-			const indirectBuffer = collection ? collection.indirectBuffer : this.device.createBuffer({
-				label: `${usage} ${modelData.name} instance indirect buffer`,
-				size: 20,
-				usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-			});
+			const indirectBuffer = collection
+				? collection.indirectBuffer
+				: this.device.createBuffer({
+						label: `${usage} ${modelData.name} instance indirect buffer`,
+						size: 20,
+						usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+					});
 			const indirectData = collection ? collection.indirectData : new Uint32Array(5);
 
 			const instanceBindGroup = this.device.createBindGroup({
@@ -1240,7 +1260,7 @@ export default class Renderer {
 							buffer: cullBuffer,
 							offset: 0,
 							size: cullBuffer.size,
-						}
+						},
 					},
 				],
 			});
@@ -1264,7 +1284,7 @@ export default class Renderer {
 							buffer: cullBuffer,
 							offset: 0,
 							size: cullBuffer.size,
-						}
+						},
 					},
 					{
 						binding: 2,
@@ -1273,8 +1293,8 @@ export default class Renderer {
 							buffer: indirectBuffer,
 							offset: 0,
 							size: indirectBuffer.size,
-						}
-					}
+						},
+					},
 				],
 			});
 
@@ -1293,8 +1313,7 @@ export default class Renderer {
 					cullingBindGroup: cullingBindGroup,
 				};
 				this.models[usage][modelData.name] = collection;
-			}
-			else {
+			} else {
 				collection.instanceData = instanceData;
 				collection.instanceBuffer = instanceBuffer;
 				collection.cullBuffer = cullBuffer;
@@ -1302,7 +1321,7 @@ export default class Renderer {
 				collection.instanceBindGroup = instanceBindGroup;
 				collection.cullingBindGroup = cullingBindGroup;
 			}
-		} 
+		}
 
 		const model = new Model(this.device, this.camera, modelData);
 		const object: SceneObject = {
@@ -1401,7 +1420,6 @@ export default class Renderer {
 				collection.instanceData.byteLength,
 			);
 		}
-
 	}
 
 	private buildDebugBuffers() {
@@ -2188,6 +2206,10 @@ export default class Renderer {
 			this.updateShadows();
 		}
 
+		if (!input.keyDown("h")) {
+			this.camera.updateFrustum(this.canvas);
+		}
+
 		if (input.keyPressed("v")) {
 			if (this.meshes.scene) {
 				this.addObject(this.meshes.scene, "static");
@@ -2204,6 +2226,18 @@ export default class Renderer {
 			this.uniformBufferData.camera.set(this.camera.projMatrix, 16);
 			this.uniformBufferData.camera.set(this.camera.position, 32);
 			this.uniformBufferData.camera.set(this.camera.projMatrixInverse, 64);
+			this.uniformBufferData.camera.set(this.camera.frustum.near.normal, 128);
+			this.uniformBufferData.camera[128 + 3] = this.camera.frustum.near.distance;
+			this.uniformBufferData.camera.set(this.camera.frustum.far.normal, 128 + 4);
+			this.uniformBufferData.camera[128 + 7] = this.camera.frustum.far.distance;
+			this.uniformBufferData.camera.set(this.camera.frustum.left.normal, 128 + 8);
+			this.uniformBufferData.camera[128 + 11] = this.camera.frustum.left.distance;
+			this.uniformBufferData.camera.set(this.camera.frustum.right.normal, 128 + 12);
+			this.uniformBufferData.camera[128 + 15] = this.camera.frustum.right.distance;
+			this.uniformBufferData.camera.set(this.camera.frustum.bottom.normal, 128 + 16);
+			this.uniformBufferData.camera[128 + 19] = this.camera.frustum.bottom.distance;
+			this.uniformBufferData.camera.set(this.camera.frustum.top.normal, 128 + 20);
+			this.uniformBufferData.camera[128 + 23] = this.camera.frustum.top.distance;
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.camera,
 				0,
@@ -2237,6 +2271,7 @@ export default class Renderer {
 
 			const cullPass = encoder.beginComputePass(this.computePassDescriptors.culling);
 			cullPass.setPipeline(this.pipelines.culling);
+			cullPass.setBindGroup(1, this.globalUniformBindGroups.camera);
 			for (const collection of Object.values(this.models.dynamic)) {
 				cullPass.setBindGroup(0, collection.cullingBindGroup);
 				cullPass.dispatchWorkgroups(Math.ceil(collection.instanceCount / 64));
