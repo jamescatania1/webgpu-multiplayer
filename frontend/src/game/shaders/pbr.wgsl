@@ -15,6 +15,11 @@ struct TransformData {
 }
 @group(0) @binding(0) var<storage, read> u_transform: array<TransformData>;
 
+struct CulledInstances {
+    instances: array<u32>,
+}
+@group(0) @binding(1) var<storage, read> u_culled: CulledInstances;
+
 struct CameraData {
     view_matrix: mat4x4<f32>,
     proj_matrix: mat4x4<f32>,
@@ -84,7 +89,8 @@ struct FragmentOut {
 
 @vertex 
 fn vs(in: VertexIn) -> VertexOut {
-    let transform: TransformData = u_transform[in.instance];
+    let instance_index: u32 = u_culled.instances[in.instance];
+    let transform: TransformData = u_transform[instance_index];
 
     let x: f32 = f32(in.vertex_xyzc.x >> 16u) / 65535.0 - 0.5;
     let y: f32 = f32(in.vertex_xyzc.x & 0xFFFFu) / 65535.0 - 0.5;
