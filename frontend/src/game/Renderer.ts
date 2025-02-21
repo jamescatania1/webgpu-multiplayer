@@ -110,15 +110,20 @@ type InstanceCollection = {
 	objects: SceneObject[];
 	instanceBase: number;
 	instanceCount: number;
+	instanceBuffer: GPUBuffer;
+	instanceData: Float32Array;
+	cullBuffer: GPUBuffer;
 	indirectBuffer: GPUBuffer;
 	indirectData: Uint32Array;
+	instanceBindGroup: GPUBindGroup;
+	cullingBindGroup: GPUBindGroup;
 };
-type InstanceClass = {
-	buffer: GPUBuffer;
-	bindGroup: GPUBindGroup;
-	data: Float32Array;
-	count: number;
-};
+// type InstanceClass = {
+// 	buffer: GPUBuffer;
+// 	bindGroup: GPUBindGroup;
+// 	data: Float32Array;
+// 	count: number;
+// };
 
 export default class Renderer {
 	private readonly canvas: HTMLCanvasElement;
@@ -156,10 +161,10 @@ export default class Renderer {
 		static: {},
 		dynamic: {},
 	};
-	private instances: {
-		static: InstanceClass;
-		dynamic: InstanceClass;
-	};
+	// private instances: {
+	// 	static: InstanceClass;
+	// 	dynamic: InstanceClass;
+	// };
 	private meshes: {
 		[key: string]: ModelData;
 	} = {};
@@ -172,6 +177,7 @@ export default class Renderer {
 		scene: GPUBindGroupLayout;
 		ssao: GPUBindGroupLayout;
 		instance: GPUBindGroupLayout;
+		instanceCulling: GPUBindGroupLayout;
 	};
 	private globalUniformBindGroups: {
 		camera: GPUBindGroup | null;
@@ -199,6 +205,7 @@ export default class Renderer {
 		ssaoUpscale: GPUComputePipeline;
 		bloomDownsample: GPUComputePipeline;
 		bloomUpsample: GPUComputePipeline;
+		culling: GPUComputePipeline;
 	};
 	private readonly renderBundleEncoders: {
 		sceneDraw: GPURenderBundleEncoder;
@@ -223,6 +230,7 @@ export default class Renderer {
 		ssaoUpscale: GPUComputePassDescriptor;
 		bloomDownsample: GPUComputePassDescriptor[];
 		bloomUpsample: GPUComputePassDescriptor[];
+		culling: GPUComputePassDescriptor;
 	};
 	private shadowData: {
 		texture: GPUTexture | null;
@@ -502,7 +510,7 @@ export default class Renderer {
 			],
 		});
 		const instanceBindGroupLayout = this.device.createBindGroupLayout({
-			label: "transform bind group layout",
+			label: "instance bind group layout",
 			entries: [
 				{
 					binding: 0,
@@ -512,6 +520,40 @@ export default class Renderer {
 						minBindingSize: INSTANCE_BUFFER_ENTRY_SIZE,
 					},
 				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.VERTEX,
+					buffer: {
+						type: "read-only-storage",
+					}
+				},
+			],
+		});
+		const instanceCullingBindGroupLayout = this.device.createBindGroupLayout({
+			label: "instance culling bind group layout",
+			entries: [
+				{
+					binding: 0,
+					visibility: GPUShaderStage.COMPUTE,
+					buffer: {
+						type: "read-only-storage",
+						minBindingSize: INSTANCE_BUFFER_ENTRY_SIZE,
+					},
+				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.COMPUTE,
+					buffer: {
+						type: "storage",
+					}
+				},
+				{
+					binding: 2,
+					visibility: GPUShaderStage.COMPUTE,
+					buffer: {
+						type: "storage",
+					}
+				}
 			],
 		});
 		this.globalUniformBindGroupLayouts = {
@@ -523,6 +565,7 @@ export default class Renderer {
 			bloomDownsample: bloomDownsampleBindGroupLayout,
 			upsample: upsampleBindGroupLayout,
 			instance: instanceBindGroupLayout,
+			instanceCulling: instanceCullingBindGroupLayout,
 		};
 
 		// pipelines for drawing the pbr scene models
@@ -809,6 +852,18 @@ export default class Renderer {
 				entryPoint: "compute_upsample",
 			},
 		});
+		const cullPipelineLayout = this.device.createPipelineLayout({
+			label: "culling layout",
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.instanceCulling],
+		});
+		const cullPipeline = this.device.createComputePipeline({
+			label: "culling pipeline",
+			layout: cullPipelineLayout,
+			compute: {
+				module: this.shaders.culling,
+				entryPoint: "compute_culling",
+			}
+		});
 
 		this.pipelines = {
 			depth: depthPrepassRenderPipeline,
@@ -821,6 +876,7 @@ export default class Renderer {
 			ssaoUpscale: ssaoUpscalePipeline,
 			bloomDownsample: bloomDownsamplePipeline,
 			bloomUpsample: bloomUpsamplePipeline,
+			culling: cullPipeline,
 		};
 
 		const cascadeBufferSizeBytes = 256;
@@ -1090,6 +1146,9 @@ export default class Renderer {
 			ssaoUpscale: {
 				label: "SSAO Upscale Pass",
 			},
+			culling: {
+				label: "Frustum Culling",
+			},
 			bloomDownsample: [],
 			bloomUpsample: [],
 		};
@@ -1102,7 +1161,7 @@ export default class Renderer {
 			});
 		}
 
-		this.instances = this.buildInstanceBuffers();
+		// this.instances = this.buildInstanceBuffers();
 
 		if (context.timestampQuery) {
 			this.buildDebugBuffers();
@@ -1136,62 +1195,125 @@ export default class Renderer {
 	 * @returns the added object.
 	 */
 	public addObject(modelData: ModelData, usage: "static" | "dynamic"): SceneObject {
-		const instances = this.instances[usage];
 		let collection = this.models[usage][modelData.name];
-		if (!collection) {
-			collection = {
-				model: modelData,
-				instanceBase: instances.count,
-				instanceCount: 0,
-				objects: [],
-				indirectBuffer: this.device.createBuffer({
-					label: `${usage} instance indirect buffer`,
-					size: 20,
-					usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
-				}),
-				indirectData: new Uint32Array(5),
-			};
-			this.models[usage][modelData.name] = collection;
-		} else if (instances.count >= instances.buffer.size / INSTANCE_BUFFER_ENTRY_SIZE) {
-			// resize the instance buffer
+		if (!collection || collection.instanceCount >= collection.instanceBuffer.size / INSTANCE_BUFFER_ENTRY_SIZE) {
+			let instanceBufferSize = collection ? collection.instanceBuffer.size * 2 : (DEFAULT_INSTANCE_BUFFER_SIZE as any)[usage];
+			
 			const instanceBuffer = this.device.createBuffer({
-				label: `${usage} instance buffer`,
-				size: instances.buffer.size * 2,
+				label: `${usage} ${modelData.name} instance buffer`,
+				size: instanceBufferSize,
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 			});
-			const instanceData = new Float32Array(instanceBuffer.size / 4);
-			instanceData.set(instances.data);
+			const instanceData = new Float32Array(instanceBufferSize / 4);
+			if (collection) {
+				instanceData.set(collection.instanceData);
+			}
+			const cullBuffer =  this.device.createBuffer({
+				label: `${usage} ${modelData.name} instance cull buffer`,
+				size: (instanceBufferSize / INSTANCE_BUFFER_ENTRY_SIZE) * 4,
+				usage: GPUBufferUsage.STORAGE,
+			});
+			const indirectBuffer = collection ? collection.indirectBuffer : this.device.createBuffer({
+				label: `${usage} ${modelData.name} instance indirect buffer`,
+				size: 20,
+				usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+			});
+			const indirectData = collection ? collection.indirectData : new Uint32Array(5);
+
 			const instanceBindGroup = this.device.createBindGroup({
-				label: `${usage} instance bind group`,
+				label: `${usage} ${modelData.name} instance bind group`,
 				layout: this.globalUniformBindGroupLayouts.instance,
 				entries: [
 					{
 						binding: 0,
 						resource: {
-							label: `${usage} instance buffer resource`,
+							label: `${usage} ${modelData.name} instance buffer resource`,
 							buffer: instanceBuffer,
 							offset: 0,
 							size: instanceBuffer.size,
 						},
 					},
+					{
+						binding: 1,
+						resource: {
+							label: `${usage} ${modelData.name} culled instance buffer resource`,
+							buffer: cullBuffer,
+							offset: 0,
+							size: cullBuffer.size,
+						}
+					},
+				],
+			});
+			const cullingBindGroup = this.device.createBindGroup({
+				label: `${usage} ${modelData.name} instance bind group`,
+				layout: this.globalUniformBindGroupLayouts.instanceCulling,
+				entries: [
+					{
+						binding: 0,
+						resource: {
+							label: `${usage} ${modelData.name} instance buffer resource`,
+							buffer: instanceBuffer,
+							offset: 0,
+							size: instanceBuffer.size,
+						},
+					},
+					{
+						binding: 1,
+						resource: {
+							label: `${usage} ${modelData.name} culled instance buffer resource`,
+							buffer: cullBuffer,
+							offset: 0,
+							size: cullBuffer.size,
+						}
+					},
+					{
+						binding: 2,
+						resource: {
+							label: `${usage} ${modelData.name} indirect command buffer resource`,
+							buffer: indirectBuffer,
+							offset: 0,
+							size: indirectBuffer.size,
+						}
+					}
 				],
 			});
 
-			instances.buffer = instanceBuffer;
-			instances.bindGroup = instanceBindGroup;
-			instances.data = instanceData;
-		}
+			if (!collection) {
+				collection = {
+					model: modelData,
+					instanceBase: -69,
+					instanceCount: 0,
+					objects: [],
+					instanceBuffer: instanceBuffer,
+					instanceData: instanceData,
+					cullBuffer: cullBuffer,
+					indirectBuffer: indirectBuffer,
+					indirectData: indirectData,
+					instanceBindGroup: instanceBindGroup,
+					cullingBindGroup: cullingBindGroup,
+				};
+				this.models[usage][modelData.name] = collection;
+			}
+			else {
+				collection.instanceData = instanceData;
+				collection.instanceBuffer = instanceBuffer;
+				collection.cullBuffer = cullBuffer;
+				collection.indirectBuffer = indirectBuffer;
+				collection.instanceBindGroup = instanceBindGroup;
+				collection.cullingBindGroup = cullingBindGroup;
+			}
+		} 
+
 		const model = new Model(this.device, this.camera, modelData);
 		const object: SceneObject = {
 			model: model,
 			usage: usage,
-			instance: collection.instanceBase + collection.instanceCount++,
+			instance: collection.instanceCount++,
 		};
-		instances.count++;
 		this.objects.push(object);
 		collection.objects.push(object);
 
-		collection.indirectData.set([modelData.indexCount, collection.instanceCount, 0, 0, collection.instanceBase]);
+		collection.indirectData.set([modelData.indexCount, collection.instanceCount, 0, 0, 0]);
 		this.device.queue.writeBuffer(collection.indirectBuffer, 0, collection.indirectData);
 
 		model.update(this.device, this.camera);
@@ -1223,43 +1345,42 @@ export default class Renderer {
 		// entityCollection.bufferFreeList.push(object.transformIndex);
 	}
 
-	private buildInstanceBuffers(): {
-		static: InstanceClass;
-		dynamic: InstanceClass;
-	} {
-		const res: { [key: string]: InstanceClass } = {};
-		for (const usage of ["static", "dynamic"]) {
-			const instanceBuffer = this.device.createBuffer({
-				label: `${usage} instance buffer`,
-				size: (DEFAULT_INSTANCE_BUFFER_SIZE as any)[usage],
-				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-			});
-			res[usage] = {
-				buffer: instanceBuffer,
-				bindGroup: this.device.createBindGroup({
-					label: `${usage} instance bind group`,
-					layout: this.globalUniformBindGroupLayouts.instance,
-					entries: [
-						{
-							binding: 0,
-							resource: {
-								label: `${usage} instance buffer resource`,
-								buffer: instanceBuffer,
-								offset: 0,
-								size: instanceBuffer.size,
-							},
-						},
-					],
-				}),
-				data: new Float32Array(instanceBuffer.size / 4),
-				count: 0,
-			};
-		}
-		return res as any;
-	}
+	// private buildInstanceBuffers(): {
+	// 	static: InstanceClass;
+	// 	dynamic: InstanceClass;
+	// } {
+	// 	const res: { [key: string]: InstanceClass } = {};
+	// 	for (const usage of ["static", "dynamic"]) {
+	// 		const instanceBuffer = this.device.createBuffer({
+	// 			label: `${usage} instance buffer`,
+	// 			size: (DEFAULT_INSTANCE_BUFFER_SIZE as any)[usage],
+	// 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+	// 		});
+	// 		res[usage] = {
+	// 			buffer: instanceBuffer,
+	// 			bindGroup: this.device.createBindGroup({
+	// 				label: `${usage} instance bind group`,
+	// 				layout: this.globalUniformBindGroupLayouts.instance,
+	// 				entries: [
+	// 					{
+	// 						binding: 0,
+	// 						resource: {
+	// 							label: `${usage} instance buffer resource`,
+	// 							buffer: instanceBuffer,
+	// 							offset: 0,
+	// 							size: instanceBuffer.size,
+	// 						},
+	// 					},
+	// 				],
+	// 			}),
+	// 			data: new Float32Array(instanceBuffer.size / 4),
+	// 			count: 0,
+	// 		};
+	// 	}
+	// 	return res as any;
+	// }
 
 	private updateInstanceBufferData(usage: "static" | "dynamic") {
-		const instances = this.instances[usage];
 		const collections = this.models[usage];
 		if (!collections) {
 			return;
@@ -1267,20 +1388,20 @@ export default class Renderer {
 		const stride = INSTANCE_BUFFER_ENTRY_SIZE / 4;
 		for (const collection of Object.values(collections)) {
 			for (const obj of collection.objects) {
-				instances.data.set(obj.model.transform.matrix, obj.instance * stride);
-				instances.data.set(obj.model.transform.normalMatrix, obj.instance * stride + 16);
-				instances.data.set(obj.model.modelData.offset, obj.instance * stride + 28);
-				instances.data.set([1.0 / obj.model.modelData.scale], obj.instance * stride + 31);
+				collection.instanceData.set(obj.model.transform.matrix, obj.instance * stride);
+				collection.instanceData.set(obj.model.transform.normalMatrix, obj.instance * stride + 16);
+				collection.instanceData.set(obj.model.modelData.offset, obj.instance * stride + 28);
+				collection.instanceData.set([1.0 / obj.model.modelData.scale], obj.instance * stride + 31);
 			}
+			this.device.queue.writeBuffer(
+				collection.instanceBuffer,
+				0,
+				collection.instanceData.buffer,
+				collection.instanceData.byteOffset,
+				collection.instanceData.byteLength,
+			);
 		}
 
-		this.device.queue.writeBuffer(
-			instances.buffer,
-			0,
-			instances.data.buffer,
-			instances.data.byteOffset,
-			instances.data.byteLength,
-		);
 	}
 
 	private buildDebugBuffers() {
@@ -1989,16 +2110,16 @@ export default class Renderer {
 	}
 
 	private drawScene(pass: GPURenderPassEncoder | GPURenderBundleEncoder) {
-		pass.setBindGroup(0, this.instances.static.bindGroup);
 		for (const collection of Object.values(this.models.static)) {
+			pass.setBindGroup(0, collection.instanceBindGroup);
 			pass.setVertexBuffer(0, collection.model.vertexBuffer);
 			pass.setIndexBuffer(collection.model.indexBuffer, collection.model.indexFormat);
 			// pass.drawIndexed(collection.model.indexCount, collection.instanceCount, 0, 0, collection.instanceBase);
 			pass.drawIndexedIndirect(collection.indirectBuffer, 0);
 		}
 
-		pass.setBindGroup(0, this.instances.dynamic.bindGroup);
 		for (const collection of Object.values(this.models.dynamic)) {
+			pass.setBindGroup(0, collection.instanceBindGroup);
 			pass.setVertexBuffer(0, collection.model.vertexBuffer);
 			pass.setIndexBuffer(collection.model.indexBuffer, collection.model.indexFormat);
 			// pass.drawIndexed(collection.model.indexCount, collection.instanceCount, 0, 0, collection.instanceBase);
@@ -2107,6 +2228,21 @@ export default class Renderer {
 			.getCurrentTexture()
 			.createView();
 		const encoder = this.device.createCommandEncoder({ label: "render encoder" });
+
+		{
+			// culling
+			for (const collection of Object.values(this.models.dynamic)) {
+				encoder.clearBuffer(collection.indirectBuffer, 4, 4); // clears instance count parameter
+			}
+
+			const cullPass = encoder.beginComputePass(this.computePassDescriptors.culling);
+			cullPass.setPipeline(this.pipelines.culling);
+			for (const collection of Object.values(this.models.dynamic)) {
+				cullPass.setBindGroup(0, collection.cullingBindGroup);
+				cullPass.dispatchWorkgroups(Math.ceil(collection.instanceCount / 64));
+			}
+			cullPass.end();
+		}
 
 		{
 			// shadow pass
