@@ -1,5 +1,5 @@
 import { mat4, vec3, vec4, type Mat4, type Vec4 } from "wgpu-matrix";
-import { SHADOW_SETTINGS, SUN_SETTINGS } from "./Renderer";
+import { renderHeight, renderWidth, SHADOW_SETTINGS, SUN_SETTINGS } from "./Renderer";
 
 type CascadeTransform = {
 	view: Mat4;
@@ -81,7 +81,7 @@ export default class Camera {
 
 		mat4.perspective(
 			(this.fov * Math.PI) / 180,
-			canvas.width / canvas.height,
+			renderWidth / renderHeight,
 			this.near,
 			this.far,
 			this.projMatrix,
@@ -109,7 +109,7 @@ export default class Camera {
 		for (let c = 0; c < SHADOW_SETTINGS.cascades.length; c++) {
 			mat4.perspective(
 				(this.fov * Math.PI) / 180,
-				canvas.width / canvas.height,
+				renderWidth / renderHeight,
 				SHADOW_SETTINGS.cascades[c].near,
 				SHADOW_SETTINGS.cascades[c].far,
 				this.shadowProjMatrix,

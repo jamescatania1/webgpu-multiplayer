@@ -10,7 +10,7 @@ export type ModelData = {
 	indexFormat: GPUIndexFormat;
 	indexCount: number;
 	triangleCount: number;
-	scale: number;
+	scale: Vec3;
 	offset: Vec3;
 	hasColor: boolean;
 	hasUV: boolean;
@@ -35,10 +35,11 @@ export default class Model {
 	public metallic = 0.0;
 	public roughness = 1.0;
 	public ao = 1.0;
+	public castShadows = true;
 
 	constructor(device: GPUDevice, camera: Camera, modelData: ModelData) {
 		this.modelData = modelData;
-		this.transform = new Transform(camera);
+		this.transform = new Transform(camera, modelData.offset, modelData.scale);
 		this.update(device, camera);
 	}
 
@@ -57,7 +58,7 @@ export async function loadBOBJ(device: GPUDevice, url: string): Promise<ModelDat
 	let hasColor: boolean;
 	let hasUV: boolean;
 	let hasNormal: boolean;
-	let scale = 1.0;
+	let scale = vec3.create();
 	let offset = vec3.create();
 
 	let vertexCount: number;
@@ -184,12 +185,14 @@ export async function loadBOBJ(device: GPUDevice, url: string): Promise<ModelDat
 				}
 				readIndex += 1;
 			}
-			if (readState === ModelReadState.ScaleFactor && chunkSize - readIndex >= 8) {
+			if (readState === ModelReadState.ScaleFactor && chunkSize - readIndex >= 24) {
 				readState = ModelReadState.ModelOffset;
 
-				scale = view.getFloat64(readIndex, true);
-				if (debug) console.log("scale factor:", scale);
-				readIndex += 8;
+				scale[0] = 1.0 / view.getFloat64(readIndex, true);
+				scale[1] = 1.0 / view.getFloat64(readIndex + 8, true);
+				scale[2] = 1.0 / view.getFloat64(readIndex + 16, true);
+				if (debug) console.log("scale factor:", `(${scale[0]}, ${scale[1]}, ${scale[2]})`);
+				readIndex += 24;
 			}
 			if (readState === ModelReadState.ModelOffset && chunkSize - readIndex >= 12) {
 				readState = ModelReadState.VertexCount;

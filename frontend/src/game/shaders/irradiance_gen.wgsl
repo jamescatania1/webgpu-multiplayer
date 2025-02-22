@@ -15,7 +15,10 @@ fn compute_irradiance(in: ComputeIn) {
     let pos: vec3<f32> = world_pos(in.id, vec2<f32>(irradiance_dim));
 
     let normal: vec3<f32> = normalize(pos);
-    var up = vec3<f32>(0.0, 1.0, 0.0);
+    var up: vec3<f32> = vec3<f32>(0.0, 1.0, 0.0);
+    if (abs(normal.y) > 0.999) {
+        up = vec3<f32>(1.0, 0.0, 0.0);
+    }
     var right: vec3<f32> = normalize(cross(up, normal));
     up = normalize(cross(normal, right));
 
@@ -36,29 +39,29 @@ fn compute_irradiance(in: ComputeIn) {
     }
     irradiance = PI * irradiance * (1.0 / f32(samples));
     
-    textureStore(u_irradiance, in.id.xy, in.id.z, vec4<f32>(irradiance, 1.0));
+    textureStore(u_irradiance, vec2<i32>(in.id.xy), in.id.z, vec4<f32>(irradiance, 1.0));
 }
 
 fn world_pos(cubemap_pos: vec3<u32>, cubemap_dim: vec2<f32>) -> vec3<f32> {
     let u: f32 = (f32(cubemap_pos.x) / f32(cubemap_dim.x)) * 2.0 - 1.0;
     let v: f32 = (f32(cubemap_pos.y) / f32(cubemap_dim.y)) * 2.0 - 1.0;
     switch cubemap_pos.z {
-        case 0: { // right
+        case 0u: { // right
             return vec3<f32>(1.0, -v, -u); 
         }
-        case 1: { // left
+        case 1u: { // left
             return vec3<f32>(-1.0, -v, u);
         }
-        case 2: { // top
+        case 2u: { // top
             return vec3<f32>(u, 1.0, v);
         }
-        case 3: { // bottom
+        case 3u: { // bottom
             return vec3<f32>(u, -1.0, -v);
         }
-        case 4: { // back
+        case 4u: { // back
             return vec3<f32>(u, -v, 1.0);
         }
-        case 5: { // front
+        case 5u: { // front
             return vec3<f32>(-u, -v, -1.0);
         }
         default: {

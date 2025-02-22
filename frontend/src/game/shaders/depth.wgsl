@@ -5,7 +5,8 @@ struct TransformData {
     model_matrix: mat4x4<f32>,
     normal_matrix: mat3x3<f32>,
     model_offset: vec3<f32>,
-    model_scale: f32,
+    model_scale: vec3<f32>,
+    cast_shadows: u32,
 }
 @group(0) @binding(0) var<storage, read> u_transform: array<TransformData>;
 

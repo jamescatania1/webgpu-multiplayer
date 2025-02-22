@@ -314,11 +314,10 @@ func main() {
 	}
 
 	// Calculate scaling factor and offset from bounds
-	scaleFactor := float64(0.0001)
+	scaleFactor := []float64{0.0001, 0.0001, 0.0001}
 	for i := 0; i < 3; i++ {
-		scaleFactor = max(scaleFactor, float64(vertexMaxBounds[i]-vertexMinBounds[i]))
+		scaleFactor[i] = 1.0 / float64(vertexMaxBounds[i]-vertexMinBounds[i])
 	}
-	scaleFactor = 1.0 / scaleFactor
 	center := make([]float32, 3)
 	for i := 0; i < 3; i++ {
 		center[i] = (vertexMaxBounds[i] + vertexMinBounds[i]) / 2.0
@@ -346,10 +345,10 @@ func main() {
 	binary.Write(output, binary.LittleEndian, uint32(len(vertexBuffer)*vertexPackedLen/vertexLen))
 	binary.Write(output, binary.LittleEndian, uint32(len(indices)))
 	for i := 0; i < len(vertexBuffer); i += vertexLen {
-		x := uint16((float64(vertexBuffer[i]-center[0])*scaleFactor + 0.5) * float64(math.MaxUint16))
-		y := uint16((float64(vertexBuffer[i+1]-center[1])*scaleFactor + 0.5) * float64(math.MaxUint16))
+		x := uint16((float64(vertexBuffer[i]-center[0])*scaleFactor[0] + 0.5) * float64(math.MaxUint16))
+		y := uint16((float64(vertexBuffer[i+1]-center[1])*scaleFactor[1] + 0.5) * float64(math.MaxUint16))
 		binary.Write(output, binary.LittleEndian, uint32(x)<<16|uint32(y))
-		z := uint16((float64(vertexBuffer[i+2]-center[2])*scaleFactor + 0.5) * float64(math.MaxUint16))
+		z := uint16((float64(vertexBuffer[i+2]-center[2])*scaleFactor[2] + 0.5) * float64(math.MaxUint16))
 		c := uint16(math.MaxUint16)
 		run := i + 3
 		if hasColor { // colors are present, pack as rgb-5_6_5

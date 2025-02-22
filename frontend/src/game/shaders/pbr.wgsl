@@ -11,7 +11,8 @@ struct TransformData {
     model_matrix: mat4x4<f32>,
     normal_matrix: mat3x3<f32>,
     model_offset: vec3<f32>,
-    model_scale: f32,
+    model_scale: vec3<f32>,
+    cast_shadows: u32,
 }
 @group(0) @binding(0) var<storage, read> u_transform: array<TransformData>;
 
@@ -71,15 +72,14 @@ struct VertexOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
-    @location(2) view_normal: vec3<f32>,
-    @location(3) uv: vec2<f32>,
-    @location(4) screen_uv: vec2<f32>,
-    @location(5) color: vec3<f32>,
-    @location(6) view_pos: vec4<f32>,
-    @location(7) vertex_pos_hash: vec2<f32>,
-    @location(8) shadow_clip_pos_0: vec4<f32>,
-    @location(9) shadow_clip_pos_1: vec4<f32>,
-    @location(10) shadow_clip_pos_2: vec4<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) screen_uv: vec2<f32>,
+    @location(4) color: vec3<f32>,
+    @location(5) view_pos: vec4<f32>,
+    @location(6) vertex_pos_hash: vec2<f32>,
+    @location(7) shadow_clip_pos_0: vec4<f32>,
+    @location(8) shadow_clip_pos_1: vec4<f32>,
+    @location(9) shadow_clip_pos_2: vec4<f32>,
 };
 
 struct FragmentOut {
@@ -122,7 +122,6 @@ fn vs(in: VertexIn) -> VertexOut {
     out.view_pos = view_pos;
     out.world_pos = vec3<f32>(world_pos.xyz);
     out.normal = normal;
-    out.view_normal = (u_global.view_matrix * (transform.model_matrix * vec4<f32>(normal.xyz, 0.0))).xyz;
     out.uv = vec2<f32>(u, v);
     out.screen_uv = (clip_pos.xy / clip_pos.w) * 0.5 + 0.5;
     out.screen_uv.y = 1.0 - out.screen_uv.y;
@@ -145,6 +144,110 @@ fn shadow_clip_pos(cascade: i32, n: vec3<f32>, cos_lo: f32, world_pos: vec4<f32>
 }
 
 const sun_size: f32 = 4.0;
+
+
+@fragment 
+fn fs(in: VertexOut) -> FragmentOut {
+    let n: vec3<f32> = normalize(in.normal);
+    let rough: f32 = 0.5;
+    let metal: f32 = 0.0;
+    let albedo: vec3<f32> = in.color;
+
+    let l_o: vec3<f32> = normalize(u_global.camera_position - in.world_pos);
+
+    let cos_lo: f32 = max(dot(n, l_o), 0.0);
+    // let l_r: vec3<f32> = 2.0 * cos_lo * n - l_o;
+    let l_r: vec3<f32> = reflect(-l_o, n);
+
+    let f_0: vec3<f32> = mix(vec3<f32>(0.04), albedo, metal);
+    var light: vec3<f32> = vec3<f32>(0.0);
+
+    var directional: vec3<f32>; {
+        let l_i: vec3<f32> = normalize(u_lighting.sun_direction);
+        let l_radiance: vec3<f32> = u_lighting.sun_color.rgb * u_lighting.sun_color.a;
+
+        let l_half: vec3<f32> = normalize(l_i + l_o);
+        let cos_li: f32 = max(dot(n, l_i), 0.0);
+        let cos_lh: f32 = max(dot(n, l_half), 0.0);
+
+        let f: vec3<f32> = fresnel_schlick(max(0.0001, dot(l_half, l_o)), f_0);
+        let d: f32 = ndf_ggx(cos_lh, rough);
+        let g: f32 = geom_schlick_ggx(cos_li, cos_lo, rough);
+
+        let k_d: vec3<f32> = mix(vec3<f32>(1.0) - f, vec3<f32>(0.0), metal);
+        let diffuse_brdf: vec3<f32> = k_d * albedo;
+        let specular_brdf: vec3<f32> = f * d * g / (4.0 * max(0.0001, cos_lo * cos_li));
+
+        directional = l_radiance * cos_li * (diffuse_brdf + specular_brdf);
+    }
+
+    // shadows
+    let view_depth = abs(in.view_pos.z);
+    var shadow_factor: f32 = 0.0;
+    if (view_depth < u_shadow[0].far) {
+        shadow_factor = shadow(0, in.shadow_clip_pos_0.xyz / in.shadow_clip_pos_0.w, in.world_pos);
+        if (u_shadow[1].near < view_depth) {
+            let shadow_factor_alt = shadow(1, in.shadow_clip_pos_1.xyz / in.shadow_clip_pos_1.w, in.world_pos);
+            shadow_factor = mix(shadow_factor, shadow_factor_alt, (view_depth - u_shadow[1].near) / (u_shadow[0].far - u_shadow[1].near));
+        }
+    }
+    else if (view_depth < u_shadow[1].far) {
+        shadow_factor = shadow(1, in.shadow_clip_pos_1.xyz / in.shadow_clip_pos_1.w, in.world_pos);
+        if (u_shadow[2].near < view_depth) {
+            let shadow_factor_alt = shadow(2, in.shadow_clip_pos_2.xyz / in.shadow_clip_pos_2.w, in.world_pos);
+            shadow_factor = mix(shadow_factor, shadow_factor_alt, (view_depth - u_shadow[2].near) / (u_shadow[1].far - u_shadow[2].near));
+        }
+    }
+    else if (view_depth < u_shadow[2].far) {
+        let cam_distance: f32 = distance(in.world_pos, u_global.camera_position);
+        if (cam_distance < u_shadow[2].far) {
+            shadow_factor = shadow(2, in.shadow_clip_pos_2.xyz / in.shadow_clip_pos_2.w, in.world_pos);
+            shadow_factor *= saturate((u_shadow[2].far - cam_distance) / shadow_fade_distance);
+        }
+    }
+
+    light += directional * (1.0 - shadow_factor);
+    var ambient: vec3<f32>; {
+        let irradiance: vec3<f32> = textureSample(u_irradiance, u_scene_sampler, n).rgb;
+        
+        let f: vec3<f32> = fresnel_schlick_roughness(cos_lo, f_0, rough);
+        let k_d: vec3<f32> = mix(vec3<f32>(1.0) - f, vec3<f32>(0.0), metal);
+        let diffuse: vec3<f32> = k_d * irradiance * albedo;
+
+        let specular_irradiance: vec3<f32> = textureSampleLevel(u_prefilter, u_scene_sampler, l_r, rough * 4.0).rgb;
+        let brdf: vec2<f32> = textureSample(u_brdf, u_scene_sampler, vec2<f32>(max(cos_lo, 0.01), rough)).rg;
+        let specular: vec3<f32> = specular_irradiance * (f * brdf.x + brdf.y);
+        ambient = diffuse + specular;
+    }
+
+    // SSAO
+    let occlusion: f32 = 1.0 - textureSample(u_ssao, u_scene_sampler, in.pos.xy / u_screen_size).r;
+    light += ambient * ambient_intensity;
+
+
+    var color: vec3<f32> = light;
+
+    // fog
+    let fog_factor: f32 = saturate((view_depth - fog_start) / (fog_end - fog_start));
+    let fog_mip: f32 = max(1.0, fog_mip_level * (1.0 - fog_factor));
+    var fog_sky_color = textureSampleLevel(
+        u_prefilter, 
+        u_scene_sampler, 
+        normalize(in.world_pos - u_global.camera_position), 
+        fog_mip
+    ).rgb;
+    fog_sky_color = pow(fog_sky_color, vec3<f32>(1.0 / 2.2));
+    color = mix(color, fog_sky_color, fog_factor);
+
+    if (debug_cascades) {
+        color = mix(color, visualize_cascades(in), 0.75);
+    }
+
+    var out: FragmentOut;
+    out.color = vec4<f32>(color * occlusion, 1.0);
+    out.occlusion = vec4<f32>(color, 1.0);
+    return out;
+}
 
 fn shadow_blocker_distance(cascade_index: i32, shadow_pos: vec3<f32>, hash: f32) -> f32 {
     let frag_depth = shadow_pos.z;
@@ -245,109 +348,6 @@ fn visualize_cascades(in: VertexOut) -> vec3<f32> {
     }
 }
 
-@fragment 
-fn fs(in: VertexOut) -> FragmentOut {
-    let n = normalize(in.normal);
-    let rough: f32 = 0.75;
-    let metal: f32 = 0.0;
-    let albedo: vec3<f32> = in.color;
-
-    let l_o: vec3<f32> = normalize(u_global.camera_position - in.world_pos);
-
-    let cos_lo: f32 = max(dot(n, l_o), 0.0);
-    let l_r: vec3<f32> = 2.0 * cos_lo * n - l_o;
-
-    let f_0: vec3<f32> = mix(vec3<f32>(0.04), albedo, metal);
-    var light: vec3<f32> = vec3<f32>(0.0);
-
-    var directional: vec3<f32>; {
-        let l_i: vec3<f32> = normalize(u_lighting.sun_direction);
-        let l_radiance: vec3<f32> = u_lighting.sun_color.rgb * u_lighting.sun_color.a;
-
-        let l_half: vec3<f32> = normalize(l_i + l_o);
-        let cos_li: f32 = max(dot(n, l_i), 0.0);
-        let cos_lh: f32 = max(dot(n, l_half), 0.0);
-
-        let f: vec3<f32> = fresnel_schlick(max(0.0, dot(l_half, l_o)), f_0, rough);
-        let d: f32 = ndf_ggx(cos_lh, rough);
-        let g: f32 = geom_schlick_ggx(cos_li, cos_lo, rough);
-
-        let k_d: vec3<f32> = mix(vec3<f32>(1.0) - f, vec3<f32>(0.0), metal);
-        let diffuse_brdf: vec3<f32> = k_d * albedo;
-        let specular_brdf: vec3<f32> = f * d * g / (4.0 * max(0.0001, cos_lo * cos_li));
-
-        directional = l_radiance * cos_li * (diffuse_brdf + specular_brdf);
-    }
-
-    // shadows
-    let view_depth = abs(in.view_pos.z);
-    var shadow_factor: f32 = 0.0;
-    if (view_depth < u_shadow[0].far) {
-        shadow_factor = shadow(0, in.shadow_clip_pos_0.xyz / in.shadow_clip_pos_0.w, in.world_pos);
-        if (u_shadow[1].near < view_depth) {
-            let shadow_factor_alt = shadow(1, in.shadow_clip_pos_1.xyz / in.shadow_clip_pos_1.w, in.world_pos);
-            shadow_factor = mix(shadow_factor, shadow_factor_alt, (view_depth - u_shadow[1].near) / (u_shadow[0].far - u_shadow[1].near));
-        }
-    }
-    else if (view_depth < u_shadow[1].far) {
-        shadow_factor = shadow(1, in.shadow_clip_pos_1.xyz / in.shadow_clip_pos_1.w, in.world_pos);
-        if (u_shadow[2].near < view_depth) {
-            let shadow_factor_alt = shadow(2, in.shadow_clip_pos_2.xyz / in.shadow_clip_pos_2.w, in.world_pos);
-            shadow_factor = mix(shadow_factor, shadow_factor_alt, (view_depth - u_shadow[2].near) / (u_shadow[1].far - u_shadow[2].near));
-        }
-    }
-    else if (view_depth < u_shadow[2].far) {
-        let cam_distance: f32 = distance(in.world_pos, u_global.camera_position);
-        if (cam_distance < u_shadow[2].far) {
-            shadow_factor = shadow(2, in.shadow_clip_pos_2.xyz / in.shadow_clip_pos_2.w, in.world_pos);
-            shadow_factor *= saturate((u_shadow[2].far - cam_distance) / shadow_fade_distance);
-        }
-    }
-
-    light += directional * (1.0 - shadow_factor);
-
-    var ambient: vec3<f32>; {
-        let irradiance: vec3<f32> = textureSample(u_irradiance, u_scene_sampler, n).rgb;
-        
-        let f: vec3<f32> = fresnel_schlick(cos_lo, f_0, rough);
-        let k_d: vec3<f32> = mix(vec3<f32>(1.0) - f, vec3<f32>(0.0), metal);
-        let diffuse: vec3<f32> = k_d * irradiance * albedo;
-
-        let specular_irradiance: vec3<f32> = textureSampleLevel(u_prefilter, u_scene_sampler, l_r, rough * 4.0).rgb;
-        let brdf: vec2<f32> = textureSample(u_brdf, u_scene_sampler, vec2<f32>(clamp(cos_lo, 0.01, 0.99), rough)).rg;
-        let specular: vec3<f32> = specular_irradiance * (f_0 * brdf.x + brdf.y);
-        ambient = diffuse + specular;
-    }
-
-    // SSAO
-    let occlusion: f32 = 1.0 - textureSample(u_ssao, u_scene_sampler, in.pos.xy / u_screen_size).r;
-    light += ambient * ambient_intensity;
-
-
-    var color: vec3<f32> = light;
-
-    // fog
-    let fog_factor: f32 = saturate((view_depth - fog_start) / (fog_end - fog_start));
-    let fog_mip: f32 = max(1.0, fog_mip_level * (1.0 - fog_factor));
-    var fog_sky_color = textureSampleLevel(
-        u_prefilter, 
-        u_scene_sampler, 
-        normalize(in.world_pos - u_global.camera_position), 
-        fog_mip
-    ).rgb;
-    fog_sky_color = pow(fog_sky_color, vec3<f32>(1.0 / 2.2));
-    color = mix(color, fog_sky_color, fog_factor);
-
-    if (debug_cascades) {
-        color = mix(color, visualize_cascades(in), 0.75);
-    }
-
-    var out: FragmentOut;
-    out.color = vec4<f32>(color * occlusion, 1.0);
-    out.occlusion = vec4<f32>(color, 1.0);
-    return out;
-}
-
 fn ndf_ggx(cos_lh: f32, r: f32) -> f32 {
 	let alpha: f32 = r * r;
 	let alpha_sq: f32 = alpha * alpha;
@@ -362,6 +362,10 @@ fn geom_schlick_ggx(cos_li: f32, cos_lo: f32, r: f32) -> f32 {
 	return ggx_1 * ggx_2;
 }
 
-fn fresnel_schlick(cos_theta: f32, f_0: vec3<f32>, r: f32) -> vec3<f32> {
+fn fresnel_schlick(cos_theta: f32, f_0: vec3<f32>) -> vec3<f32> {
+    return f_0 + (1.0 - f_0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+}
+
+fn fresnel_schlick_roughness(cos_theta: f32, f_0: vec3<f32>, r: f32) -> vec3<f32> {
     return f_0 + (max(vec3<f32>(1.0 - r), f_0) - f_0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
 }

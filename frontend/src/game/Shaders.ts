@@ -7,6 +7,7 @@ import { default as ssaoShaderSource } from "./shaders/ssao.wgsl";
 import { default as ssaoBlurShaderSource } from "./shaders/ssao_blur.wgsl";
 import { default as upsampleShaderSource } from "./shaders/upsample.wgsl";
 import { default as bloomDownsampleShaderSource } from "./shaders/bloom_downsample.wgsl";
+import { default as bloomUpsampleShaderSource } from "./shaders/bloom_upsample.wgsl";
 import { default as postFXShaderSource } from "./shaders/post_fx.wgsl";
 import { default as cullingShaderSource } from "./shaders/culling.wgsl";
 import { default as cubemapGeneratorSource } from "./shaders/cubemap_gen.wgsl";
@@ -25,6 +26,7 @@ export type Shaders = {
 	ssaoBlur: GPUShaderModule;
 	upsample: GPUShaderModule;
 	bloomDownsample: GPUShaderModule;
+	bloomUpsample: GPUShaderModule;
 	postFX: GPUShaderModule;
 	culling: GPUShaderModule;
 	cubemapGenerator: GPUShaderModule;
@@ -87,6 +89,10 @@ export function loadShaders(device: GPUDevice): Shaders {
 		label: "bloom downsample shader",
 		code: bloomDownsampleShaderSource,
 	});
+	const bloomUpsample = loadShader(device, {
+		label: "bloom upsample shader",
+		code: bloomUpsampleShaderSource,
+	});
 	const postFX = loadShader(device, {
 		label: "post processing shader",
 		code: postFXShaderSource,
@@ -122,6 +128,7 @@ export function loadShaders(device: GPUDevice): Shaders {
 		ssaoBlur: ssaoBlur,
 		upsample: upsample,
 		bloomDownsample: bloomDownsample,
+		bloomUpsample: bloomUpsample,
 		postFX: postFX,
 		culling: culling,
 		cubemapGenerator: cubemapGenerator,

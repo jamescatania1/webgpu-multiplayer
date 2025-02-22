@@ -4,14 +4,14 @@ import loadHDR from "./utils/hdr";
 
 export type ResourceAtlas = {
 	monke: ModelData;
-	city: ModelData;
+	scene: ModelData;
 	sky: HDRData;
 };
 
 const resourceDescriptors = {
 	models: {
-		monke: "/monke.bobj",
-		city: "/city.bobj",
+		monke: "/cube.bobj",
+		scene: "/scene.bobj",
 	},
 	hdrs: {
 		sky: {

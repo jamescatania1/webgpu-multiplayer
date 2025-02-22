@@ -25,10 +25,11 @@ export const SSAO_SETTINGS = {
 	blurKernelSize: 4,
 };
 export const BLOOM_SETTINGS = {
-	levels: 4,
-	intensity: 0.25,
-	threshold: 55.8,
-	softThreshold: 0.0,
+	levels: 6,
+	padding: 16,
+	intensity: 1.0,
+	radius: 0.85,
+	threshold: 1.01,
 };
 export const SHADOW_SETTINGS = {
 	debugCascades: false,
@@ -95,7 +96,7 @@ export const POSTFX_SETTINGS = {
 	brightness: 0.0,
 	gamma: 2.0,
 };
-export const INSTANCE_BUFFER_ENTRY_SIZE = 128;
+export const INSTANCE_BUFFER_ENTRY_SIZE = 144;
 const DEFAULT_INSTANCE_BUFFER_SIZE = {
 	static: 10 * INSTANCE_BUFFER_ENTRY_SIZE,
 	dynamic: 10 * INSTANCE_BUFFER_ENTRY_SIZE,
@@ -114,11 +115,17 @@ type InstanceCollection = {
 	instanceBuffer: GPUBuffer;
 	instanceData: Float32Array;
 	cullBuffer: GPUBuffer;
+	cullShadowBuffer: GPUBuffer;
 	indirectBuffer: GPUBuffer;
 	indirectData: Uint32Array;
+	indirectShadowBuffer: GPUBuffer;
+	indirectShadowData: Uint32Array;
 	instanceBindGroup: GPUBindGroup;
 	cullingBindGroup: GPUBindGroup;
 };
+
+export let renderWidth = 0;
+export let renderHeight = 0;
 
 export default class Renderer {
 	private readonly canvas: HTMLCanvasElement;
@@ -161,6 +168,7 @@ export default class Renderer {
 		camera: GPUBindGroupLayout;
 		shadows: GPUBindGroupLayout;
 		bloomDownsample: GPUBindGroupLayout;
+		bloomUpsample: GPUBindGroupLayout;
 		upsample: GPUBindGroupLayout;
 		depth: GPUBindGroupLayout;
 		scene: GPUBindGroupLayout;
@@ -249,8 +257,11 @@ export default class Renderer {
 		this.device = context.device;
 		this.adapter = context.adapter;
 		this.ctx = context.ctx;
-
+		
 		this.shaders = loadShaders(this.device);
+		
+		renderWidth = this.canvas.width + BLOOM_SETTINGS.padding * 2,
+		renderHeight = this.canvas.height + BLOOM_SETTINGS.padding * 2,
 
 		this.camera = new Camera(canvas);
 		this.camera.position[1] = 5.0;
@@ -468,8 +479,52 @@ export default class Renderer {
 				},
 			],
 		});
+		const bloomUpsampleBindGroupLayout = this.device.createBindGroupLayout({
+			label: "bloom upsample bind group layout",
+			entries: [
+				{
+					binding: 0,
+					visibility: GPUShaderStage.COMPUTE,
+					texture: {
+						viewDimension: "2d",
+						multisampled: false,
+						sampleType: "float",
+					},
+				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.COMPUTE,
+					texture: {
+						viewDimension: "2d",
+						multisampled: false,
+						sampleType: "float",
+					},
+				},
+				{
+					binding: 2,
+					visibility: GPUShaderStage.COMPUTE,
+					sampler: {
+						type: "filtering",
+					},
+				},
+				{
+					binding: 3,
+					visibility: GPUShaderStage.COMPUTE,
+					storageTexture: {
+						access: "write-only",
+						format: "rgba16float",
+						viewDimension: "2d",
+					},
+				},
+				{
+					binding: 4,
+					visibility: GPUShaderStage.COMPUTE,
+					buffer: {},
+				},
+			],
+		});
 		const upsampleBindGroupLayout = this.device.createBindGroupLayout({
-			label: "bloom downsample bind group layout",
+			label: "upsample bind group layout",
 			entries: [
 				{
 					binding: 0,
@@ -516,6 +571,13 @@ export default class Renderer {
 						type: "read-only-storage",
 					},
 				},
+				{
+					binding: 2,
+					visibility: GPUShaderStage.VERTEX,
+					buffer: {
+						type: "read-only-storage",
+					},
+				},
 			],
 		});
 		const instanceCullingBindGroupLayout = this.device.createBindGroupLayout({
@@ -543,6 +605,20 @@ export default class Renderer {
 						type: "storage",
 					},
 				},
+				{
+					binding: 3,
+					visibility: GPUShaderStage.COMPUTE,
+					buffer: {
+						type: "storage",
+					},
+				},
+				{
+					binding: 4,
+					visibility: GPUShaderStage.COMPUTE,
+					buffer: {
+						type: "storage",
+					},
+				},
 			],
 		});
 		this.globalUniformBindGroupLayouts = {
@@ -552,6 +628,7 @@ export default class Renderer {
 			scene: sceneBindGroupLayout,
 			ssao: ssaoBindGroupLayout,
 			bloomDownsample: bloomDownsampleBindGroupLayout,
+			bloomUpsample: bloomUpsampleBindGroupLayout,
 			upsample: upsampleBindGroupLayout,
 			instance: instanceBindGroupLayout,
 			instanceCulling: instanceCullingBindGroupLayout,
@@ -737,6 +814,9 @@ export default class Renderer {
 						],
 					},
 				],
+				constants: {
+					padding: BLOOM_SETTINGS.padding,
+				}
 			},
 			fragment: {
 				module: this.shaders.postFX,
@@ -744,7 +824,6 @@ export default class Renderer {
 				targets: [{ format: this.presentationFormat }],
 				constants: {
 					...POSTFX_SETTINGS,
-					bloom_intensity: BLOOM_SETTINGS.intensity,
 				},
 			},
 			primitive: {
@@ -825,20 +904,23 @@ export default class Renderer {
 				entryPoint: "compute_downsample",
 				constants: {
 					threshold: BLOOM_SETTINGS.threshold,
-					soft_threshold: BLOOM_SETTINGS.softThreshold,
 				},
 			},
 		});
 		const bloomUpsamplePipelineLayout = this.device.createPipelineLayout({
 			label: "bloom upsample layout",
-			bindGroupLayouts: [this.globalUniformBindGroupLayouts.upsample],
+			bindGroupLayouts: [this.globalUniformBindGroupLayouts.bloomUpsample],
 		});
 		const bloomUpsamplePipeline = this.device.createComputePipeline({
 			label: "bloom upsample compute pipeline",
 			layout: bloomUpsamplePipelineLayout,
 			compute: {
-				module: this.shaders.upsample,
+				module: this.shaders.bloomUpsample,
 				entryPoint: "compute_upsample",
+				constants: {
+					intensity: BLOOM_SETTINGS.intensity,
+					radius: BLOOM_SETTINGS.radius,
+				}
 			},
 		});
 		const cullPipelineLayout = this.device.createPipelineLayout({
@@ -1175,11 +1257,12 @@ export default class Renderer {
 		this.sky = new Sky(this.device, this.resources.sky, this.shaders);
 		this.onLightingLoad();
 
-		this.addObject(this.resources.city, "static");
+		this.addObject(this.resources.scene, "static");
 		this.updateInstanceBufferData("static");
 
-		for (let i = 0; i < 4000; i++) {
+		for (let i = 0; i < 5000; i++) {
 			const obj = this.addObject(this.resources.monke, "dynamic");
+			obj.model.castShadows = false;
 			obj.model.transform.position[0] = (Math.random() - 0.5) * 300.0;
 			obj.model.transform.position[1] = (Math.random() - 0.5) * 300.0;
 			obj.model.transform.position[2] = (Math.random() - 0.5) * 300.0;
@@ -1216,6 +1299,11 @@ export default class Renderer {
 				size: (instanceBufferSize / INSTANCE_BUFFER_ENTRY_SIZE) * 4,
 				usage: GPUBufferUsage.STORAGE,
 			});
+			const cullShadowBuffer = this.device.createBuffer({
+				label: `${usage} ${modelData.name} shadow instance cull buffer`,
+				size: (instanceBufferSize / INSTANCE_BUFFER_ENTRY_SIZE) * 4,
+				usage: GPUBufferUsage.STORAGE,
+			});
 			const indirectBuffer = collection
 				? collection.indirectBuffer
 				: this.device.createBuffer({
@@ -1224,6 +1312,14 @@ export default class Renderer {
 						usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 					});
 			const indirectData = collection ? collection.indirectData : new Uint32Array(5);
+			const indirectShadowBuffer = collection
+				? collection.indirectShadowBuffer
+				: this.device.createBuffer({
+						label: `${usage} ${modelData.name} shadow instance indirect buffer`,
+						size: 20,
+						usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+					});
+			const indirectShadowData = collection ? collection.indirectShadowData : new Uint32Array(5);
 
 			const instanceBindGroup = this.device.createBindGroup({
 				label: `${usage} ${modelData.name} instance bind group`,
@@ -1247,6 +1343,15 @@ export default class Renderer {
 							size: cullBuffer.size,
 						},
 					},
+					{
+						binding: 2,
+						resource: {
+							label: `${usage} ${modelData.name} culled shadow instance buffer resource`,
+							buffer: cullShadowBuffer,
+							offset: 0,
+							size: cullShadowBuffer.size,
+						}
+					}
 				],
 			});
 			const cullingBindGroup = this.device.createBindGroup({
@@ -1274,12 +1379,30 @@ export default class Renderer {
 					{
 						binding: 2,
 						resource: {
+							label: `${usage} ${modelData.name} culled shadow instance buffer resource`,
+							buffer: cullShadowBuffer,
+							offset: 0,
+							size: cullShadowBuffer.size,
+						},
+					},
+					{
+						binding: 3,
+						resource: {
 							label: `${usage} ${modelData.name} indirect command buffer resource`,
 							buffer: indirectBuffer,
 							offset: 0,
 							size: indirectBuffer.size,
 						},
 					},
+					{
+						binding: 4,
+						resource: {
+							label: `${usage} ${modelData.name} indirect shadow command buffer resource`,
+							buffer: indirectShadowBuffer,
+							offset: 0,
+							size: indirectShadowBuffer.size,
+						},
+					}
 				],
 			});
 
@@ -1292,8 +1415,11 @@ export default class Renderer {
 					instanceBuffer: instanceBuffer,
 					instanceData: instanceData,
 					cullBuffer: cullBuffer,
+					cullShadowBuffer: cullShadowBuffer,
 					indirectBuffer: indirectBuffer,
 					indirectData: indirectData,
+					indirectShadowBuffer: indirectShadowBuffer,
+					indirectShadowData: indirectShadowData,
 					instanceBindGroup: instanceBindGroup,
 					cullingBindGroup: cullingBindGroup,
 				};
@@ -1302,7 +1428,9 @@ export default class Renderer {
 				collection.instanceData = instanceData;
 				collection.instanceBuffer = instanceBuffer;
 				collection.cullBuffer = cullBuffer;
+				collection.cullShadowBuffer = cullShadowBuffer;
 				collection.indirectBuffer = indirectBuffer;
+				collection.indirectShadowBuffer = indirectShadowBuffer;
 				collection.instanceBindGroup = instanceBindGroup;
 				collection.cullingBindGroup = cullingBindGroup;
 			}
@@ -1319,6 +1447,9 @@ export default class Renderer {
 
 		collection.indirectData.set([modelData.indexCount, collection.instanceCount, 0, 0, 0]);
 		this.device.queue.writeBuffer(collection.indirectBuffer, 0, collection.indirectData);
+
+		collection.indirectShadowData.set([modelData.indexCount, collection.instanceCount, 0, 0, 0]);
+		this.device.queue.writeBuffer(collection.indirectShadowBuffer, 0, collection.indirectShadowData);
 
 		model.update(this.device, this.camera);
 		return object;
@@ -1391,11 +1522,13 @@ export default class Renderer {
 		}
 		const stride = INSTANCE_BUFFER_ENTRY_SIZE / 4;
 		for (const collection of Object.values(collections)) {
+			collection.instanceData.fill(0);
 			for (const obj of collection.objects) {
 				collection.instanceData.set(obj.model.transform.matrix, obj.instance * stride);
 				collection.instanceData.set(obj.model.transform.normalMatrix, obj.instance * stride + 16);
 				collection.instanceData.set(obj.model.modelData.offset, obj.instance * stride + 28);
-				collection.instanceData.set([1.0 / obj.model.modelData.scale], obj.instance * stride + 31);
+				collection.instanceData.set(obj.model.modelData.scale, obj.instance * stride + 32);
+				collection.instanceData[obj.instance * stride + 35] = obj.model.castShadows ? 1 : 0;
 			}
 			this.device.queue.writeBuffer(
 				collection.instanceBuffer,
@@ -1473,7 +1606,7 @@ export default class Renderer {
 		// output depth texture
 		const depthTexture = this.device.createTexture({
 			label: "scene depth texture",
-			size: [this.canvas.width, this.canvas.height],
+			size: [renderWidth, renderHeight],
 			sampleCount: 4,
 			format: "depth32float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
@@ -1481,7 +1614,7 @@ export default class Renderer {
 
 		const normalTexture = this.device.createTexture({
 			label: "depth pass view normal texture",
-			size: [this.canvas.width, this.canvas.height],
+			size: [renderWidth, renderHeight],
 			sampleCount: 4,
 			format: "rgba16float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
@@ -1490,7 +1623,7 @@ export default class Renderer {
 		// scene draw color texture
 		const sceneDrawTexture = this.device.createTexture({
 			label: "scene draw texture",
-			size: [this.canvas.width, this.canvas.height],
+			size: [renderWidth, renderHeight],
 			sampleCount: 4,
 			format: "rgba16float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
@@ -1500,7 +1633,7 @@ export default class Renderer {
 		// resolve texture for post-processing output
 		const sceneResolveTexture = this.device.createTexture({
 			label: "scene single-sample resolve texture",
-			size: [this.canvas.width, this.canvas.height],
+			size: [renderWidth, renderHeight],
 			sampleCount: 1,
 			format: "rgba16float",
 			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
@@ -1508,7 +1641,7 @@ export default class Renderer {
 		const sceneResolveView = sceneResolveTexture.createView();
 
 		// ssao output texture
-		const ssaoResolution = [Math.ceil(this.canvas.width / 2), Math.ceil(this.canvas.height / 2)];
+		const ssaoResolution = [Math.ceil(renderWidth / 2), Math.ceil(renderHeight / 2)];
 		const ssaoTexture = this.device.createTexture({
 			label: "ssao texture",
 			size: ssaoResolution,
@@ -1531,7 +1664,7 @@ export default class Renderer {
 		// resolve texture for ssao output
 		const ssaoUpscaleTexture = this.device.createTexture({
 			label: "ssao upscale texture",
-			size: [this.canvas.width, this.canvas.height],
+			size: [renderWidth, renderHeight],
 			sampleCount: 1,
 			format: "rgba16float",
 			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -1549,7 +1682,7 @@ export default class Renderer {
 
 		// bloom textures
 		this.bloomLevels = [];
-		let bloomTextureSize = [this.canvas.width, this.canvas.height];
+		let bloomTextureSize = [renderWidth, renderHeight];
 		for (let i = 0; i <= BLOOM_SETTINGS.levels; i++) {
 			this.bloomLevels.push({
 				width: bloomTextureSize[0],
@@ -1559,7 +1692,16 @@ export default class Renderer {
 		}
 		const bloomTexture = this.device.createTexture({
 			label: "bloom texture",
-			size: [this.canvas.width, this.canvas.height],
+			size: [renderWidth, renderHeight],
+			sampleCount: 1,
+			format: "rgba16float",
+			dimension: "2d",
+			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+			mipLevelCount: BLOOM_SETTINGS.levels + 1,
+		});
+		const bloomOutTexture = this.device.createTexture({
+			label: "bloom upsample texture",
+			size: [renderWidth, renderHeight],
 			sampleCount: 1,
 			format: "rgba16float",
 			dimension: "2d",
@@ -1572,7 +1714,7 @@ export default class Renderer {
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			mappedAtCreation: true,
 		});
-		new Float32Array(depthUniformScreenSizeBuffer.getMappedRange()).set([this.canvas.width, this.canvas.height]);
+		new Float32Array(depthUniformScreenSizeBuffer.getMappedRange()).set([renderWidth, renderHeight]);
 		depthUniformScreenSizeBuffer.unmap();
 
 		// bind group for the depth texture
@@ -1621,11 +1763,7 @@ export default class Renderer {
 				},
 				{
 					binding: 1,
-					resource: sceneResolveView,
-				},
-				{
-					binding: 2,
-					resource: bloomTexture.createView({
+					resource: bloomOutTexture.createView({
 						dimension: "2d",
 						baseMipLevel: 0,
 						mipLevelCount: 1,
@@ -1740,11 +1878,18 @@ export default class Renderer {
 					},
 					{
 						binding: 2,
-						resource: bloomTexture.createView({
-							dimension: "2d",
-							baseMipLevel: i + 1,
-							mipLevelCount: 1,
-						}),
+						resource:
+							i == BLOOM_SETTINGS.levels - 1
+								? bloomOutTexture.createView({
+										dimension: "2d",
+										baseMipLevel: i + 1,
+										mipLevelCount: 1,
+									})
+								: bloomTexture.createView({
+										dimension: "2d",
+										baseMipLevel: i + 1,
+										mipLevelCount: 1,
+									}),
 					},
 					{
 						binding: 3,
@@ -1762,28 +1907,50 @@ export default class Renderer {
 			this.globalUniformBindGroups.bloomDownsample.push(bloomDownsampleBindGroup);
 
 			const bloomUpsampleBindGroup = this.device.createBindGroup({
-				layout: this.globalUniformBindGroupLayouts.upsample,
+				layout: this.globalUniformBindGroupLayouts.bloomUpsample,
 				entries: [
 					{
 						binding: 0,
-						resource: bloomTexture.createView({
+						resource:
+							i === 0
+								? sceneResolveView
+								: bloomTexture.createView({
+										dimension: "2d",
+										baseMipLevel: i,
+										mipLevelCount: 1,
+									}),
+					},
+					{
+						binding: 1,
+						resource: bloomOutTexture.createView({
 							dimension: "2d",
 							baseMipLevel: i + 1,
 							mipLevelCount: 1,
 						}),
 					},
 					{
-						binding: 1,
+						binding: 2,
 						resource: filterSampler,
 					},
 					{
-						binding: 2,
-						resource: bloomTexture.createView({
+						binding: 3,
+						resource: bloomOutTexture.createView({
 							dimension: "2d",
 							baseMipLevel: i,
 							mipLevelCount: 1,
 						}),
 					},
+					{
+						binding: 4,
+						resource: {
+							buffer:
+								i === 0
+									? this.uniformBuffers.bloomDownsample.prefilterEnabled
+									: this.uniformBuffers.bloomDownsample.prefilterDisabled,
+							offset: 0,
+							size: 4,
+						},
+					}
 				],
 			});
 			this.globalUniformBindGroups.bloomUpsample.push(bloomUpsampleBindGroup);
@@ -2083,14 +2250,14 @@ export default class Renderer {
 		let encoder = this.renderBundleEncoders.depth;
 		encoder.setPipeline(this.pipelines.depth);
 		encoder.setBindGroup(1, this.globalUniformBindGroups.camera);
-		this.drawScene(encoder);
+		this.drawScene(encoder, false);
 		this.renderBundles.depth = encoder.finish();
 
 		for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
 			encoder = this.renderBundleEncoders.shadows[i];
 			encoder.setPipeline(this.pipelines.shadows);
 			encoder.setBindGroup(1, this.globalUniformBindGroups.shadows[i]);
-			this.drawScene(encoder);
+			this.drawScene(encoder, true);
 			this.renderBundles.shadows[i] = encoder.finish();
 		}
 
@@ -2099,7 +2266,7 @@ export default class Renderer {
 		encoder.setBindGroup(1, this.globalUniformBindGroups.camera);
 		encoder.setBindGroup(2, this.globalUniformBindGroups.depth);
 		encoder.setBindGroup(3, this.globalUniformBindGroups.scene);
-		this.drawScene(encoder);
+		this.drawScene(encoder, false);
 		if (this.sky && this.sky.skyboxRenderData) {
 			encoder.setPipeline(this.sky.skyboxRenderData.pipeline);
 			encoder.setBindGroup(0, this.sky.skyboxRenderData.cameraBindGroup);
@@ -2111,13 +2278,13 @@ export default class Renderer {
 		this.renderBundles.sceneDraw = encoder.finish();
 	}
 
-	private drawScene(pass: GPURenderPassEncoder | GPURenderBundleEncoder) {
+	private drawScene(pass: GPURenderPassEncoder | GPURenderBundleEncoder, isShadowPass: boolean) {
 		for (const collection of Object.values(this.models.static)) {
 			pass.setBindGroup(0, collection.instanceBindGroup);
 			pass.setVertexBuffer(0, collection.model.vertexBuffer);
 			pass.setIndexBuffer(collection.model.indexBuffer, collection.model.indexFormat);
 			// pass.drawIndexed(collection.model.indexCount, collection.instanceCount, 0, 0, collection.instanceBase);
-			pass.drawIndexedIndirect(collection.indirectBuffer, 0);
+			pass.drawIndexedIndirect(isShadowPass ? collection.indirectShadowBuffer : collection.indirectBuffer, 0);
 		}
 
 		for (const collection of Object.values(this.models.dynamic)) {
@@ -2125,13 +2292,14 @@ export default class Renderer {
 			pass.setVertexBuffer(0, collection.model.vertexBuffer);
 			pass.setIndexBuffer(collection.model.indexBuffer, collection.model.indexFormat);
 			// pass.drawIndexed(collection.model.indexCount, collection.instanceCount, 0, 0, collection.instanceBase);
-			pass.drawIndexedIndirect(collection.indirectBuffer, 0);
+			pass.drawIndexedIndirect(isShadowPass ? collection.indirectShadowBuffer : collection.indirectBuffer, 0);
 		}
 	}
 
 	private cullScene(encoder: GPUCommandEncoder) {
 		for (const collection of Object.values(this.models.dynamic)) {
 			encoder.clearBuffer(collection.indirectBuffer, 4, 4); // clears instance count parameter
+			encoder.clearBuffer(collection.indirectShadowBuffer, 4, 4); // clears instance count parameter
 		}
 
 		const cullPass = encoder.beginComputePass(this.computePassDescriptors.culling);
@@ -2150,9 +2318,9 @@ export default class Renderer {
 				continue;
 			}
 			obj.model.roughness = 0.0;
-			obj.model.transform.rotation[0] += deltaTime * 0.000001 * obj.instance;
-			obj.model.transform.rotation[1] += deltaTime * 0.000001 * obj.instance;
-			obj.model.transform.rotation[2] += deltaTime * 0.000001 * obj.instance;
+			obj.model.transform.rotation[0] += deltaTime * 0.001 * (Math.sin(obj.instance) * 0.5 + 0.8);
+			obj.model.transform.rotation[1] += deltaTime * 0.001 * (Math.sin(obj.instance) * 0.5 + 0.8);
+			obj.model.transform.rotation[2] += deltaTime * 0.001 * (Math.sin(obj.instance) * 0.5 + 0.8);
 			obj.model.update(this.device, this.camera);
 		}
 		this.updateInstanceBufferData("dynamic");
@@ -2277,7 +2445,7 @@ export default class Renderer {
 			ssaoPass.setBindGroup(0, this.globalUniformBindGroups.ssao);
 			ssaoPass.setBindGroup(1, this.globalUniformBindGroups.scene);
 			ssaoPass.setBindGroup(2, this.globalUniformBindGroups.camera);
-			ssaoPass.dispatchWorkgroups(Math.ceil(this.canvas.width / 16), Math.ceil(this.canvas.height / 16), 1);
+			ssaoPass.dispatchWorkgroups(Math.ceil(renderWidth / 16), Math.ceil(renderHeight / 16), 1);
 			ssaoPass.end();
 
 			// ssao blur horizontal pass
@@ -2285,21 +2453,21 @@ export default class Renderer {
 			ssaoBlurPass.setPipeline(this.pipelines.ssaoBlurX);
 			ssaoBlurPass.setBindGroup(0, this.globalUniformBindGroups.ssaoBlurX);
 			ssaoBlurPass.setBindGroup(1, this.globalUniformBindGroups.ssaoBlurKernelX);
-			ssaoBlurPass.dispatchWorkgroups(Math.ceil(this.canvas.width / 16), Math.ceil(this.canvas.height / 16), 1);
+			ssaoBlurPass.dispatchWorkgroups(Math.ceil(renderWidth / 16), Math.ceil(renderHeight / 16), 1);
 			ssaoBlurPass.end();
 
 			ssaoBlurPass = encoder.beginComputePass(this.computePassDescriptors.ssaoBlurY);
 			ssaoBlurPass.setPipeline(this.pipelines.ssaoBlurY);
 			ssaoBlurPass.setBindGroup(0, this.globalUniformBindGroups.ssaoBlurY);
 			ssaoBlurPass.setBindGroup(1, this.globalUniformBindGroups.ssaoBlurKernelY);
-			ssaoBlurPass.dispatchWorkgroups(Math.ceil(this.canvas.width / 16), Math.ceil(this.canvas.height / 16), 1);
+			ssaoBlurPass.dispatchWorkgroups(Math.ceil(renderWidth / 16), Math.ceil(renderHeight / 16), 1);
 			ssaoBlurPass.end();
 
 			// ssao upscale pass
 			const ssaoUpscalePass = encoder.beginComputePass(this.computePassDescriptors.ssaoUpscale);
 			ssaoUpscalePass.setPipeline(this.pipelines.ssaoUpscale);
 			ssaoUpscalePass.setBindGroup(0, this.globalUniformBindGroups.ssaoUpscale);
-			ssaoUpscalePass.dispatchWorkgroups(Math.ceil(this.canvas.width / 8), Math.ceil(this.canvas.height / 8), 1);
+			ssaoUpscalePass.dispatchWorkgroups(Math.ceil(renderWidth / 8), Math.ceil(renderHeight / 8), 1);
 			ssaoUpscalePass.end();
 		}
 
@@ -2326,6 +2494,7 @@ export default class Renderer {
 			}
 
 			// bloom upsample pass
+			
 			for (let i = BLOOM_SETTINGS.levels - 1; i >= 0; i--) {
 				const bloomPass = encoder.beginComputePass(this.computePassDescriptors.bloomUpsample[i]);
 				bloomPass.setPipeline(this.pipelines.bloomUpsample);
@@ -2403,6 +2572,8 @@ export default class Renderer {
 	}
 
 	public onResize() {
+		renderWidth = this.canvas.width + BLOOM_SETTINGS.padding * 2;
+		renderHeight = this.canvas.height + BLOOM_SETTINGS.padding * 2;
 		this.buildScreenRenderDescriptors();
 	}
 }

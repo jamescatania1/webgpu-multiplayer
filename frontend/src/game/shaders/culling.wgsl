@@ -2,7 +2,8 @@ struct TransformData {
     model_matrix: mat4x4<f32>,
     normal_matrix: mat3x3<f32>,
     model_offset: vec3<f32>,
-    model_scale: f32,
+    model_scale: vec3<f32>,
+    cast_shadows: u32,
 }
 @group(0) @binding(0) var<storage, read> u_transform: array<TransformData>;
 
@@ -10,6 +11,7 @@ struct CulledInstances {
     instances: array<u32>,
 }
 @group(0) @binding(1) var<storage, read_write> u_culled: CulledInstances;
+@group(0) @binding(2) var<storage, read_write> u_culled_shadow: CulledInstances;
 
 struct IndirectArgs {
     index_count: u32,
@@ -18,7 +20,8 @@ struct IndirectArgs {
     reserved1: u32,
     reserved2: u32,
 }
-@group(0) @binding(2) var<storage, read_write> u_indirect_args: IndirectArgs;
+@group(0) @binding(3) var<storage, read_write> u_indirect_args: IndirectArgs;
+@group(0) @binding(4) var<storage, read_write> u_indirect_shadow_args: IndirectArgs;
 
 struct CameraData {
     view_matrix: mat4x4<f32>,
@@ -69,4 +72,9 @@ fn compute_culling(in: ComputeIn) {
 
     let culled_index: u32 = atomicAdd(&u_indirect_args.instance_count, 1u);
     u_culled.instances[culled_index] = instance_index;
+
+    if (instance.cast_shadows > 0u) {
+        let culled_shadow_index: u32 = atomicAdd(&u_indirect_shadow_args.instance_count, 1u);
+        u_culled_shadow.instances[culled_shadow_index] = instance_index;
+    }
 }

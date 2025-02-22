@@ -1,14 +1,13 @@
-override bloom_intensity: f32 = 0.2;
-override exposure: f32 = 1.0;
-override temperature: f32 = 0.2; // [-1.6, 1.6] for cool/warm
-override tint: f32 = 0.1;
-override contrast: f32 = 1.0;
-override brightness: f32 = 0.0;
-override gamma: f32 = 2.2;
+override exposure: f32;
+override temperature: f32;
+override tint: f32;
+override contrast: f32;
+override brightness: f32;
+override gamma: f32;
+override padding: i32;
 
 @group(0) @binding(0) var color_sampler: sampler;
 @group(0) @binding(1) var color_texture: texture_2d<f32>;
-@group(0) @binding(2) var bloom_texture: texture_2d<f32>;
 
 struct VertexOut {
     @builtin(position) pos: vec4<f32>,
@@ -17,18 +16,21 @@ struct VertexOut {
 
 @vertex 
 fn vs(@location(0) pos: vec2<f32>) -> VertexOut {
+    var screen_pos: vec2<f32> = (pos + 1.0) / 2.0;
+    screen_pos.y = 1.0 - screen_pos.y;
+
+    var sample_pixel: vec2<i32> = vec2<i32>(screen_pos * vec2<f32>(textureDimensions(color_texture).xy - u32(padding * 2)));
+    sample_pixel += vec2<i32>(padding);
+
     var out: VertexOut;
     out.pos = vec4<f32>(pos, 0.0, 1.0);
-    out.uv = (pos + 1.0) / 2.0;
-    out.uv.y = 1.0 - out.uv.y;
+    out.uv = vec2<f32>(sample_pixel) / vec2<f32>(textureDimensions(color_texture).xy);
     return out;
 }
 
 @fragment 
 fn fs(in: VertexOut) -> @location(0) vec4<f32> {
-    let bloom: vec3<f32> = textureSample(bloom_texture, color_sampler, in.uv).rgb;
     var color: vec3<f32> = textureSample(color_texture, color_sampler, in.uv).rgb;
-    color = mix(color, bloom, bloom_intensity);
 
     // exposure
     color *= exposure;
