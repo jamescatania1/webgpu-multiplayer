@@ -248,7 +248,7 @@ fn visualize_cascades(in: VertexOut) -> vec3<f32> {
 @fragment 
 fn fs(in: VertexOut) -> FragmentOut {
     let n = normalize(in.normal);
-    let rough: f32 = 1.0;
+    let rough: f32 = 0.75;
     let metal: f32 = 0.0;
     let albedo: vec3<f32> = in.color;
 

@@ -1,86 +1,45 @@
-export type TextureMap = "albedo" | "normal" | "metallic" | "roughness";
+import { loadBOBJ, type ModelData } from "./Model";
+import type { HDRData } from "./utils/hdr";
+import loadHDR from "./utils/hdr";
 
-export type TextureResource = {
-	albedo?: WebGLTexture;
-	normal?: WebGLTexture;
-	metallic?: WebGLTexture;
-	roughness?: WebGLTexture;
+export type ResourceAtlas = {
+	monke: ModelData;
+	city: ModelData;
+	sky: HDRData;
 };
 
-const textureData = {
-	monke: {
-		baseURL: "/monke-smooth",
-		maps: ["albedo", "normal", "metallic", "roughness"],
-		extension: "webp",
+const resourceDescriptors = {
+	models: {
+		monke: "/monke.bobj",
+		city: "/city.bobj",
 	},
-    empty: {
-        baseURL: "/",
-        maps: [],
-        extension: "webp",
-    }
+	hdrs: {
+		sky: {
+			url: "/sky.hdr",
+			minComponent: 100.0,
+		},
+	},
 };
 
-export const textures: { [key: string]: TextureResource } = {
-	monke: {},
-    base: {},
-    empty: {},
-};
-
-export const loadTextures = (gl: WebGL2RenderingContext): Promise<void> => {
-	return new Promise<void>((resolve, reject) => {
-		const promises: Promise<[string, TextureMap, WebGLTexture]>[] = [];
-		Object.entries(textureData).forEach(([name, resource]) => {
-			for (const map of resource.maps) {
-				promises.push(
-					new Promise<[string, TextureMap, WebGLTexture]>((resolve, reject) => {
-						const texture = gl.createTexture();
-						gl.bindTexture(gl.TEXTURE_2D, texture);
-						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
-						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
-						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-						gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-						const image = new Image();
-						image.src = `${resource.baseURL}_${map}.${resource.extension}`;
-						image.onload = () => {
-							gl.activeTexture(gl.TEXTURE0);
-							gl.bindTexture(gl.TEXTURE_2D, texture);
-							gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-							switch (map) {
-								case "albedo":
-									gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-									break;
-								case "normal":
-									gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
-									break;
-								case "metallic":
-									gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, image);
-									break;
-								case "roughness":
-									gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, image);
-									break;
-							}
-							gl.bindTexture(gl.TEXTURE_2D, null);
-							gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-							resolve([name, map as TextureMap, texture]);
-						};
-						image.onerror = (e) => {
-							reject(e);
-						};
-					}),
-				);
-			}
-		});
-
-		Promise.all(promises)
-			.then((res) => {
-				for (const [name, map, texture] of res) {
-					textures[name][map] = texture;
-				}
-				resolve();
-			})
-			.catch((err) => {
-				reject(err);
-			});
+export const loadResources = async (device: GPUDevice): Promise<ResourceAtlas> => {
+	const modelPromises = Object.entries(resourceDescriptors.models).map(async ([key, url]) => {
+		const model = await loadBOBJ(device, url);
+		const res: any = {};
+		res[key] = model;
+		return res;
 	});
+	const hdrPromises = Object.entries(resourceDescriptors.hdrs).map(async ([key, desc]) => {
+		const hdr = await loadHDR(desc.url, desc.minComponent);
+		const res: any = {};
+		res[key] = hdr;
+		return res;
+	});
+	const resources = await Promise.all([...modelPromises, ...hdrPromises]);
+	const atlas: any = {};
+	for (const resource of resources) {
+		for (const [key, data] of Object.entries(resource)) {
+			atlas[key] = data;
+		}
+	}
+	return atlas as ResourceAtlas;
 };

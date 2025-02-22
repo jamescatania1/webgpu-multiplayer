@@ -27,52 +27,44 @@ struct CameraData {
 }
 @group(1) @binding(0) var<uniform> u_camera: CameraData;
 
-struct CameraFrustum {
-    near_normal: vec3<f32>,
-    near_distance: f32,
-    far_normal: vec3<f32>,
-    far_distance: f32,
-    left_normal: vec3<f32>,
-    left_distance: f32,
-    right_normal: vec3<f32>,
-    right_distance: f32,
-    bottom_normal: vec3<f32>,
-    bottom_distance: f32,
-    top_normal: vec3<f32>,
-    top_distance: f32,
-}
-@group(1) @binding(3) var<uniform> u_frustum: CameraFrustum;
-
 struct ComputeIn {
     @builtin(global_invocation_id) id: vec3<u32>,
 };
 
-fn bounding_box(model: TransformData) -> array<vec4<f32>, 8> {
+fn bounding_box(instance: TransformData) -> array<vec4<f32>, 8> {
     var res= array<vec4<f32>, 8>();
-    res[0] = model.model_matrix * vec4<f32>(vec3<f32>(-0.5, -0.5, -0.5) * model.model_scale + model.model_offset, 1.0);
-    res[1] = model.model_matrix * vec4<f32>(vec3<f32>(-0.5, 0.5, -0.5) * model.model_scale + model.model_offset, 1.0);
-    res[2] = model.model_matrix * vec4<f32>(vec3<f32>(0.5, -0.5, -0.5) * model.model_scale + model.model_offset, 1.0);
-    res[3] = model.model_matrix * vec4<f32>(vec3<f32>(0.5, 0.5, -0.5) * model.model_scale + model.model_offset, 1.0);
-    res[4] = model.model_matrix * vec4<f32>(vec3<f32>(-0.5, -0.5, 0.5) * model.model_scale + model.model_offset, 1.0);
-    res[5] = model.model_matrix * vec4<f32>(vec3<f32>(-0.5, 0.5, 0.5) * model.model_scale + model.model_offset, 1.0);
-    res[6] = model.model_matrix * vec4<f32>(vec3<f32>(0.5, -0.5, 0.5) * model.model_scale + model.model_offset, 1.0);
-    res[7] = model.model_matrix * vec4<f32>(vec3<f32>(0.5, 0.5, 0.5) * model.model_scale + model.model_offset, 1.0);
+    res[0] = u_camera.proj_matrix * (u_camera.view_matrix * instance.model_matrix * vec4<f32>(vec3<f32>(-0.5, -0.5, -0.5) * instance.model_scale + instance.model_offset, 1.0));
+    res[1] = u_camera.proj_matrix * (u_camera.view_matrix * instance.model_matrix * vec4<f32>(vec3<f32>(-0.5, 0.5, -0.5) * instance.model_scale + instance.model_offset, 1.0));
+    res[2] = u_camera.proj_matrix * (u_camera.view_matrix * instance.model_matrix * vec4<f32>(vec3<f32>(0.5, -0.5, -0.5) * instance.model_scale + instance.model_offset, 1.0));
+    res[3] = u_camera.proj_matrix * (u_camera.view_matrix * instance.model_matrix * vec4<f32>(vec3<f32>(0.5, 0.5, -0.5) * instance.model_scale + instance.model_offset, 1.0));
+    res[4] = u_camera.proj_matrix * (u_camera.view_matrix * instance.model_matrix * vec4<f32>(vec3<f32>(-0.5, -0.5, 0.5) * instance.model_scale + instance.model_offset, 1.0));
+    res[5] = u_camera.proj_matrix * (u_camera.view_matrix * instance.model_matrix * vec4<f32>(vec3<f32>(-0.5, 0.5, 0.5) * instance.model_scale + instance.model_offset, 1.0));
+    res[6] = u_camera.proj_matrix * (u_camera.view_matrix * instance.model_matrix * vec4<f32>(vec3<f32>(0.5, -0.5, 0.5) * instance.model_scale + instance.model_offset, 1.0));
+    res[7] = u_camera.proj_matrix * (u_camera.view_matrix * instance.model_matrix * vec4<f32>(vec3<f32>(0.5, 0.5, 0.5) * instance.model_scale + instance.model_offset, 1.0));
     return res;
+}
+
+fn visible(instance: TransformData) -> bool {
+    var bounds: array<vec4<f32>, 8> = bounding_box(instance);
+    for (var i: u32 = 0u; i < 8u; i++) {
+        let clip_pos: vec4<f32> = bounds[i];
+        if (clip_pos.x >= -clip_pos.w && clip_pos.x <= clip_pos.w 
+            && clip_pos.y >= -clip_pos.w && clip_pos.y <= clip_pos.w
+            && clip_pos.z >= -clip_pos.w && clip_pos.z <= clip_pos.w
+        ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 @compute @workgroup_size(64)
 fn compute_culling(in: ComputeIn) {
     let instance_index: u32 = in.id.x;
 
-    let model: TransformData = u_transform[instance_index];
-    var bounds: array<vec4<f32>, 8> = bounding_box(model);
-    for (var i: u32 = 0u; i < 8u; i++) {
-        if (dot(bounds[i].xyz, u_frustum.left_normal) - u_frustum.left_distance > -1.0) {
-            return;
-        }
-        if (dot(bounds[i].xyz, u_frustum.right_normal) + u_frustum.right_distance > -1.0) {
-            return;
-        }
+    let instance: TransformData = u_transform[instance_index];
+    if (!visible(instance)) {
+        return;
     }
 
     let culled_index: u32 = atomicAdd(&u_indirect_args.instance_count, 1u);

@@ -6,6 +6,7 @@ import { loadShaders, type Shaders } from "./Shaders";
 import Transform from "./Transform";
 import Model, { loadBOBJ, type ModelData } from "./Model";
 import Sky from "./Sky";
+import { loadResources, type ResourceAtlas } from "./Resources";
 
 const MAX_VEL = 1.0;
 const ACCEL = 0.01;
@@ -118,12 +119,6 @@ type InstanceCollection = {
 	instanceBindGroup: GPUBindGroup;
 	cullingBindGroup: GPUBindGroup;
 };
-// type InstanceClass = {
-// 	buffer: GPUBuffer;
-// 	bindGroup: GPUBindGroup;
-// 	data: Float32Array;
-// 	count: number;
-// };
 
 export default class Renderer {
 	private readonly canvas: HTMLCanvasElement;
@@ -161,13 +156,7 @@ export default class Renderer {
 		static: {},
 		dynamic: {},
 	};
-	// private instances: {
-	// 	static: InstanceClass;
-	// 	dynamic: InstanceClass;
-	// };
-	private meshes: {
-		[key: string]: ModelData;
-	} = {};
+	private resources: ResourceAtlas | null = null;
 	private globalUniformBindGroupLayouts: {
 		camera: GPUBindGroupLayout;
 		shadows: GPUBindGroupLayout;
@@ -243,7 +232,7 @@ export default class Renderer {
 
 	private readonly shaders: Shaders;
 	private readonly camera: Camera;
-	private readonly sky: Sky;
+	private sky: Sky | null = null;
 	private objects: SceneObject[] = [];
 	private postFXQuad: {
 		vertexBuffer: GPUBuffer;
@@ -273,7 +262,7 @@ export default class Renderer {
 			format: this.presentationFormat,
 		});
 
-		this.sky = new Sky(this, this.device, this.shaders);
+
 		this.shadowData = {
 			texture: null,
 		};
@@ -295,11 +284,6 @@ export default class Renderer {
 				{
 					binding: 2,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-					buffer: {},
-				},
-				{
-					binding: 3,
-					visibility: GPUShaderStage.COMPUTE,
 					buffer: {},
 				},
 			],
@@ -891,7 +875,7 @@ export default class Renderer {
 		this.uniformBuffers = {
 			camera: this.device.createBuffer({
 				label: "camera uniform buffer",
-				size: 512 + 24 * 4,
+				size: 256 + 64,
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			}),
 			shadows: this.device.createBuffer({
@@ -949,14 +933,6 @@ export default class Renderer {
 						buffer: this.uniformBuffers.shadows,
 						offset: 0,
 						size: this.uniformBuffers.shadows.size,
-					},
-				},
-				{
-					binding: 3,
-					resource: {
-						buffer: this.uniformBuffers.camera,
-						offset: 512,
-						size: 24 * 4,
 					},
 				},
 			],
@@ -1185,23 +1161,32 @@ export default class Renderer {
 			this.timestampData = null;
 		}
 
-		const urls = ["/monke.bobj", "/scene.bobj"];
-		Promise.all(urls.map((url) => loadBOBJ(this.device, url))).then((models) => {
-			for (const model of models) {
-				this.meshes[model.name] = model;
-			}
-			// this.addObject(this.meshes["/scene.bobj"], "static");
-			this.updateInstanceBufferData("static");
-			for (let i = 0; i < 1000; i++) {
-				const obj = this.addObject(this.meshes["/monke.bobj"], "dynamic");
-				obj.model.transform.position[0] = (Math.random() - 0.5) * 100.0;
-				obj.model.transform.position[1] = (Math.random() - 0.5) * 100.0;
-				obj.model.transform.position[2] = (Math.random() - 0.5) * 100.0;
-				obj.model.update(this.device, this.camera);
-			}
-
-			this.updateRenderBundles();
+		loadResources(this.device).then((atlas) => {
+			this.resources = atlas;
+			this.loadScene();
 		});
+	}
+
+	private loadScene() {
+		if (!this.resources) {
+			return;
+		}
+
+		this.sky = new Sky(this.device, this.resources.sky, this.shaders);
+		this.onLightingLoad();
+
+		this.addObject(this.resources.city, "static");
+		this.updateInstanceBufferData("static");
+
+		for (let i = 0; i < 4000; i++) {
+			const obj = this.addObject(this.resources.monke, "dynamic");
+			obj.model.transform.position[0] = (Math.random() - 0.5) * 300.0;
+			obj.model.transform.position[1] = (Math.random() - 0.5) * 300.0;
+			obj.model.transform.position[2] = (Math.random() - 0.5) * 300.0;
+			obj.model.update(this.device, this.camera);
+		}
+
+		this.updateRenderBundles();
 	}
 
 	/**
@@ -1905,8 +1890,8 @@ export default class Renderer {
 		);
 	}
 
-	public onLightingLoad() {
-		const skyData = this.sky.sceneRenderData;
+	private onLightingLoad() {
+		const skyData = this.sky!.sceneRenderData;
 		if (!skyData) {
 			return;
 		}
@@ -2083,7 +2068,6 @@ export default class Renderer {
 			],
 		});
 		this.globalUniformBindGroups.scene = sceneBindGroup;
-		this.updateRenderBundles();
 	}
 
 	private updateRenderBundles() {
@@ -2116,7 +2100,7 @@ export default class Renderer {
 		encoder.setBindGroup(2, this.globalUniformBindGroups.depth);
 		encoder.setBindGroup(3, this.globalUniformBindGroups.scene);
 		this.drawScene(encoder);
-		if (this.sky.skyboxRenderData) {
+		if (this.sky && this.sky.skyboxRenderData) {
 			encoder.setPipeline(this.sky.skyboxRenderData.pipeline);
 			encoder.setBindGroup(0, this.sky.skyboxRenderData.cameraBindGroup);
 			encoder.setBindGroup(1, this.sky.skyboxRenderData.textureBindGroup);
@@ -2143,6 +2127,21 @@ export default class Renderer {
 			// pass.drawIndexed(collection.model.indexCount, collection.instanceCount, 0, 0, collection.instanceBase);
 			pass.drawIndexedIndirect(collection.indirectBuffer, 0);
 		}
+	}
+
+	private cullScene(encoder: GPUCommandEncoder) {
+		for (const collection of Object.values(this.models.dynamic)) {
+			encoder.clearBuffer(collection.indirectBuffer, 4, 4); // clears instance count parameter
+		}
+
+		const cullPass = encoder.beginComputePass(this.computePassDescriptors.culling);
+		cullPass.setPipeline(this.pipelines.culling);
+		cullPass.setBindGroup(1, this.globalUniformBindGroups.camera);
+		for (const collection of Object.values(this.models.dynamic)) {
+			cullPass.setBindGroup(0, collection.cullingBindGroup);
+			cullPass.dispatchWorkgroups(Math.ceil(collection.instanceCount / 64));
+		}
+		cullPass.end();
 	}
 
 	public draw(input: Input, deltaTime: number) {
@@ -2206,18 +2205,14 @@ export default class Renderer {
 			this.updateShadows();
 		}
 
-		if (!input.keyDown("h")) {
-			this.camera.updateFrustum(this.canvas);
-		}
-
-		if (input.keyPressed("v")) {
-			if (this.meshes.scene) {
-				this.addObject(this.meshes.scene, "static");
-			}
-		}
-		if (input.keyPressed("b")) {
-			this.removeObject(this.objects[Math.floor(Math.random() * this.objects.length)]);
-		}
+		// if (input.keyPressed("v")) {
+		// 	if (this.meshes.scene) {
+		// 		this.addObject(this.meshes.scene, "static");
+		// 	}
+		// }
+		// if (input.keyPressed("b")) {
+		// 	this.removeObject(this.objects[Math.floor(Math.random() * this.objects.length)]);
+		// }
 
 		// update uniforms
 		{
@@ -2226,18 +2221,6 @@ export default class Renderer {
 			this.uniformBufferData.camera.set(this.camera.projMatrix, 16);
 			this.uniformBufferData.camera.set(this.camera.position, 32);
 			this.uniformBufferData.camera.set(this.camera.projMatrixInverse, 64);
-			this.uniformBufferData.camera.set(this.camera.frustum.near.normal, 128);
-			this.uniformBufferData.camera[128 + 3] = this.camera.frustum.near.distance;
-			this.uniformBufferData.camera.set(this.camera.frustum.far.normal, 128 + 4);
-			this.uniformBufferData.camera[128 + 7] = this.camera.frustum.far.distance;
-			this.uniformBufferData.camera.set(this.camera.frustum.left.normal, 128 + 8);
-			this.uniformBufferData.camera[128 + 11] = this.camera.frustum.left.distance;
-			this.uniformBufferData.camera.set(this.camera.frustum.right.normal, 128 + 12);
-			this.uniformBufferData.camera[128 + 15] = this.camera.frustum.right.distance;
-			this.uniformBufferData.camera.set(this.camera.frustum.bottom.normal, 128 + 16);
-			this.uniformBufferData.camera[128 + 19] = this.camera.frustum.bottom.distance;
-			this.uniformBufferData.camera.set(this.camera.frustum.top.normal, 128 + 20);
-			this.uniformBufferData.camera[128 + 23] = this.camera.frustum.top.distance;
 			this.device.queue.writeBuffer(
 				this.uniformBuffers.camera,
 				0,
@@ -2247,7 +2230,7 @@ export default class Renderer {
 			);
 
 			// rot proj matrix for the skybox
-			if (this.sky.skyboxRenderData) {
+			if (this.sky && this.sky.skyboxRenderData) {
 				this.device.queue.writeBuffer(
 					this.sky.skyboxRenderData.cameraUniformBuffer,
 					0,
@@ -2263,20 +2246,8 @@ export default class Renderer {
 			.createView();
 		const encoder = this.device.createCommandEncoder({ label: "render encoder" });
 
-		{
-			// culling
-			for (const collection of Object.values(this.models.dynamic)) {
-				encoder.clearBuffer(collection.indirectBuffer, 4, 4); // clears instance count parameter
-			}
-
-			const cullPass = encoder.beginComputePass(this.computePassDescriptors.culling);
-			cullPass.setPipeline(this.pipelines.culling);
-			cullPass.setBindGroup(1, this.globalUniformBindGroups.camera);
-			for (const collection of Object.values(this.models.dynamic)) {
-				cullPass.setBindGroup(0, collection.cullingBindGroup);
-				cullPass.dispatchWorkgroups(Math.ceil(collection.instanceCount / 64));
-			}
-			cullPass.end();
+		if (!input.keyDown("h")) {
+			this.cullScene(encoder);
 		}
 
 		{

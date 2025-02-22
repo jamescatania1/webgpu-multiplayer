@@ -24,14 +24,6 @@ export default class Camera {
 	public readonly viewProjMatrix = mat4.create();
 	public readonly rotProjMatrix = mat4.create();
 	public readonly cascadeMatrices: CascadeTransform[];
-	public readonly frustum = {
-		near: { normal: vec3.create(), point: vec3.create(), distance: 0 },
-		far: { normal: vec3.create(), point: vec3.create(), distance: 0 },
-		left: { normal: vec3.create(), point: vec3.create(), distance: 0 },
-		right: { normal: vec3.create(), point: vec3.create(), distance: 0 },
-		bottom: { normal: vec3.create(), point: vec3.create(), distance: 0 },
-		top: { normal: vec3.create(), point: vec3.create(), distance: 0 },
-	};
 
 	// used to build the shadow camera matrices
 	private readonly clipCorners: Vec4[] = [
@@ -111,50 +103,6 @@ export default class Camera {
 
 		mat4.lookAt(vec3.create(), this.forward, this.up, this.rotProjMatrix);
 		mat4.mul(this.projMatrix, this.rotProjMatrix, this.rotProjMatrix);
-	}
-
-	public updateFrustum(canvas: HTMLCanvasElement) {
-		vec3.addScaled(this.position, this.forward, this.near, this.frustum.near.point);
-		this.frustum.near.normal.set(this.forward);
-		vec3.normalize(this.frustum.near.normal, this.frustum.near.normal);
-		this.frustum.near.distance = vec3.dot(this.frustum.near.normal, this.frustum.near.point);
-
-		vec3.addScaled(this.position, this.forward, this.far, this.frustum.far.point);
-		vec3.negate(this.forward, this.frustum.far.normal);
-		vec3.normalize(this.frustum.far.normal, this.frustum.far.normal);
-		this.frustum.far.distance = vec3.dot(this.frustum.far.normal, this.frustum.far.point);
-
-		const vSideDistance = this.far * Math.tan((0.5 * this.fov * Math.PI) / 180);
-		const hSideDistance = vSideDistance * (canvas.width / canvas.height);
-		const frontMultFar = vec4.scale(this.forward, this.far);
-
-		this.frustum.left.point.set(this.position);
-		vec3.cross(this.up, vec3.addScaled(frontMultFar, this.right, hSideDistance), this.frustum.left.normal);
-		vec3.normalize(this.frustum.left.normal, this.frustum.left.normal);
-		this.frustum.left.distance = vec3.dot(this.frustum.left.normal, this.frustum.left.point);
-
-		this.frustum.right.point.set(this.position);
-		vec3.cross(vec3.subtract(frontMultFar, vec3.scale(this.right, hSideDistance)), this.up, this.frustum.right.normal);
-		vec3.normalize(this.frustum.right.normal, this.frustum.right.normal);
-		this.frustum.right.distance = vec3.dot(this.frustum.right.normal, this.frustum.right.point);
-
-		this.frustum.top.point.set(this.position);
-		vec3.cross(
-			this.right,
-			vec3.addScaled(vec3.scale(this.forward, this.far), this.up, -vSideDistance),
-			this.frustum.top.normal,
-		);
-		vec3.normalize(this.frustum.top.normal, this.frustum.top.normal);
-		this.frustum.top.distance = vec3.dot(this.frustum.top.normal, this.frustum.top.point);
-
-		this.frustum.bottom.point.set(this.position);
-		vec3.cross(
-			vec3.addScaled(vec3.scale(this.forward, this.far), this.up, vSideDistance),
-			this.right,
-			this.frustum.bottom.normal,
-		);
-		vec3.normalize(this.frustum.bottom.normal, this.frustum.bottom.normal);
-		this.frustum.bottom.distance = vec3.dot(this.frustum.bottom.normal, this.frustum.bottom.point);
 	}
 
 	public updateShadows(canvas: HTMLCanvasElement) {
