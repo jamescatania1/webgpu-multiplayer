@@ -117,33 +117,26 @@ export default class Camera {
 		vec3.addScaled(this.position, this.forward, this.near, this.frustum.near.point);
 		this.frustum.near.normal.set(this.forward);
 		vec3.normalize(this.frustum.near.normal, this.frustum.near.normal);
-		this.frustum.near.distance = vec3.dot(this.frustum.near.normal, this.frustum.near.point)
+		this.frustum.near.distance = vec3.dot(this.frustum.near.normal, this.frustum.near.point);
 
 		vec3.addScaled(this.position, this.forward, this.far, this.frustum.far.point);
 		vec3.negate(this.forward, this.frustum.far.normal);
 		vec3.normalize(this.frustum.far.normal, this.frustum.far.normal);
-		this.frustum.far.distance = vec3.dot(this.frustum.far.normal, this.frustum.far.point)
+		this.frustum.far.distance = vec3.dot(this.frustum.far.normal, this.frustum.far.point);
 
-		const vSideDistance = this.far * Math.tan((this.fov * Math.PI) / 360);
+		const vSideDistance = this.far * Math.tan((0.5 * this.fov * Math.PI) / 180);
 		const hSideDistance = vSideDistance * (canvas.width / canvas.height);
+		const frontMultFar = vec4.scale(this.forward, this.far);
 
 		this.frustum.left.point.set(this.position);
-		vec3.cross(
-			this.up,
-			vec3.addScaled(vec3.scale(this.forward, this.far), this.right, hSideDistance),
-			this.frustum.left.normal,
-		);
+		vec3.cross(this.up, vec3.addScaled(frontMultFar, this.right, hSideDistance), this.frustum.left.normal);
 		vec3.normalize(this.frustum.left.normal, this.frustum.left.normal);
-		this.frustum.left.distance = vec3.dot(this.frustum.left.normal, this.frustum.left.point)
+		this.frustum.left.distance = vec3.dot(this.frustum.left.normal, this.frustum.left.point);
 
 		this.frustum.right.point.set(this.position);
-		vec3.cross(
-			vec3.addScaled(vec3.scale(this.forward, this.far), this.right, -hSideDistance),
-			this.up,
-			this.frustum.right.normal,
-		);
+		vec3.cross(vec3.subtract(frontMultFar, vec3.scale(this.right, hSideDistance)), this.up, this.frustum.right.normal);
 		vec3.normalize(this.frustum.right.normal, this.frustum.right.normal);
-		this.frustum.right.distance = vec3.dot(this.frustum.right.normal, this.frustum.right.point)
+		this.frustum.right.distance = vec3.dot(this.frustum.right.normal, this.frustum.right.point);
 
 		this.frustum.top.point.set(this.position);
 		vec3.cross(
@@ -152,8 +145,8 @@ export default class Camera {
 			this.frustum.top.normal,
 		);
 		vec3.normalize(this.frustum.top.normal, this.frustum.top.normal);
-		this.frustum.top.distance = vec3.dot(this.frustum.top.normal, this.frustum.top.point)
-		
+		this.frustum.top.distance = vec3.dot(this.frustum.top.normal, this.frustum.top.point);
+
 		this.frustum.bottom.point.set(this.position);
 		vec3.cross(
 			vec3.addScaled(vec3.scale(this.forward, this.far), this.up, vSideDistance),
@@ -161,7 +154,7 @@ export default class Camera {
 			this.frustum.bottom.normal,
 		);
 		vec3.normalize(this.frustum.bottom.normal, this.frustum.bottom.normal);
-		this.frustum.bottom.distance = vec3.dot(this.frustum.bottom.normal, this.frustum.bottom.point)
+		this.frustum.bottom.distance = vec3.dot(this.frustum.bottom.normal, this.frustum.bottom.point);
 	}
 
 	public updateShadows(canvas: HTMLCanvasElement) {

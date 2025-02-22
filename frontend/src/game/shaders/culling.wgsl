@@ -67,10 +67,10 @@ fn compute_culling(in: ComputeIn) {
     let model: TransformData = u_transform[instance_index];
     var bounds: array<vec4<f32>, 8> = bounding_box(model);
     for (var i: u32 = 0u; i < 8u; i++) {
-        if (dot(bounds[i].xyz, u_frustum.left_normal) + u_frustum.left_distance > 0.0) {
+        if (dot(bounds[i].xyz, u_frustum.left_normal) - u_frustum.left_distance > -1.0) {
             return;
         }
-        if (dot(bounds[i].xyz, u_frustum.right_normal) + u_frustum.right_distance > 0.0) {
+        if (dot(bounds[i].xyz, u_frustum.right_normal) + u_frustum.right_distance > -1.0) {
             return;
         }
     }
