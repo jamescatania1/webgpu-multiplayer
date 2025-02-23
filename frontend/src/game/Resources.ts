@@ -11,7 +11,7 @@ export type ResourceAtlas = {
 const resourceDescriptors = {
 	models: {
 		monke: "/cube.bobj",
-		scene: "/scene.bobj",
+		scene: "/city.bobj",
 	},
 	hdrs: {
 		sky: {

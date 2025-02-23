@@ -5,6 +5,9 @@ override contrast: f32;
 override brightness: f32;
 override gamma: f32;
 override padding: i32;
+override vignette_start: f32;
+override vignette_end: f32;
+override vignette_intensity: f32;
 
 @group(0) @binding(0) var color_sampler: sampler;
 @group(0) @binding(1) var color_texture: texture_2d<f32>;
@@ -12,6 +15,8 @@ override padding: i32;
 struct VertexOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) screen_uv: vec2<f32>,
+    @location(2) aspect: f32,
 };
 
 @vertex 
@@ -19,12 +24,15 @@ fn vs(@location(0) pos: vec2<f32>) -> VertexOut {
     var screen_pos: vec2<f32> = (pos + 1.0) / 2.0;
     screen_pos.y = 1.0 - screen_pos.y;
 
-    var sample_pixel: vec2<i32> = vec2<i32>(screen_pos * vec2<f32>(textureDimensions(color_texture).xy - u32(padding * 2)));
+    let sample_dimensions: vec2<u32> = textureDimensions(color_texture).xy;
+    var sample_pixel: vec2<i32> = vec2<i32>(screen_pos * vec2<f32>(sample_dimensions - u32(padding * 2)));
     sample_pixel += vec2<i32>(padding);
 
     var out: VertexOut;
     out.pos = vec4<f32>(pos, 0.0, 1.0);
-    out.uv = vec2<f32>(sample_pixel) / vec2<f32>(textureDimensions(color_texture).xy);
+    out.uv = vec2<f32>(sample_pixel) / vec2<f32>(sample_dimensions);
+    out.screen_uv = screen_pos;
+    out.aspect = f32(sample_dimensions.x) / f32(sample_dimensions.y);
     return out;
 }
 
@@ -44,7 +52,12 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     // tone mapping
     color = aces(color);
 
+    let center_distance: f32 = length((in.screen_uv * 2.0 - 1.0) * vec2<f32>(max(1.0, in.aspect), max(1.0, 1.0 / in.aspect)));
+    color = mix(color, vec3<f32>(0.0), vignette_intensity * smoothstep(vignette_start, vignette_end, center_distance));
+
+    // gamma correction
     color = pow(color, vec3<f32>(1.0 / gamma));
+
     return vec4<f32>(color, 1.0);
     // return vec4<f32>(textureSample(color_texture, color_sampler, in.uv).rgb + color * 0.00001, 1.0);
 }

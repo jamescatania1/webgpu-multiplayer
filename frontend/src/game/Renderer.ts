@@ -40,17 +40,17 @@ export const SHADOW_SETTINGS = {
 		{
 			depthScale: 300.0,
 			near: 0.1,
-			far: 10.0,
-			bias: 0.0001,
+			far: 7.0,
+			bias: 0.00015,
 			normalBias: 0.1,
 			samples: 24,
 			blockerSamples: 24,
 		},
 		{
 			depthScale: 300.0,
-			near: 8.1,
+			near: 6.1,
 			far: 30.0,
-			bias: 0.00015,
+			bias: 0.00025,
 			normalBias: 0.15,
 			samples: 16,
 			blockerSamples: 16,
@@ -95,6 +95,9 @@ export const POSTFX_SETTINGS = {
 	contrast: 1.05,
 	brightness: 0.0,
 	gamma: 2.0,
+	vignetteStart: 1.0,
+	vignetteEnd: 1.5,
+	vignetteIntensity: 0.25,
 };
 export const INSTANCE_BUFFER_ENTRY_SIZE = 144;
 const DEFAULT_INSTANCE_BUFFER_SIZE = {
@@ -204,10 +207,10 @@ export default class Renderer {
 		bloomUpsample: GPUComputePipeline;
 		culling: GPUComputePipeline;
 	};
-	private readonly renderBundleEncoders: {
-		sceneDraw: GPURenderBundleEncoder;
-		depth: GPURenderBundleEncoder;
-		shadows: GPURenderBundleEncoder[];
+	private readonly renderBundleDescriptors: {
+		sceneDraw: GPURenderBundleEncoderDescriptor;
+		depth: GPURenderBundleEncoderDescriptor;
+		shadows: GPURenderBundleEncoderDescriptor[];
 	};
 	private renderBundles: {
 		sceneDraw: GPURenderBundle | null;
@@ -772,7 +775,7 @@ export default class Renderer {
 				entryPoint: "fs",
 				targets: [{ format: "rgba16float" }],
 				constants: {
-					near: this.camera.near,
+					// near: this.camera.near,
 					// far: this.camera.far,
 					ambient_intensity: SKY_SETTINGS.ambientIntensity,
 					debug_cascades: SHADOW_SETTINGS.debugCascades ? 1 : 0,
@@ -823,7 +826,15 @@ export default class Renderer {
 				entryPoint: "fs",
 				targets: [{ format: this.presentationFormat }],
 				constants: {
-					...POSTFX_SETTINGS,
+					exposure: POSTFX_SETTINGS.exposure,
+					temperature: POSTFX_SETTINGS.temperature,
+					tint: POSTFX_SETTINGS.tint,
+					contrast: POSTFX_SETTINGS.contrast,
+					brightness: POSTFX_SETTINGS.brightness,
+					gamma: POSTFX_SETTINGS.gamma,
+					vignette_start: POSTFX_SETTINGS.vignetteStart,
+					vignette_end: POSTFX_SETTINGS.vignetteEnd,
+					vignette_intensity: POSTFX_SETTINGS.vignetteIntensity,
 				},
 			},
 			primitive: {
@@ -1172,21 +1183,21 @@ export default class Renderer {
 		// create the output textures and render pass descriptor
 		this.buildScreenRenderDescriptors();
 
-		this.renderBundleEncoders = {
-			sceneDraw: this.device.createRenderBundleEncoder({
+		this.renderBundleDescriptors = {
+			sceneDraw: {
 				label: "Scene Pass Encoder",
 				colorFormats: ["rgba16float"],
 				depthReadOnly: true,
 				depthStencilFormat: "depth32float",
 				sampleCount: 4,
-			}),
-			depth: this.device.createRenderBundleEncoder({
+			},
+			depth: {
 				label: "Depth Pass Encoder",
 				colorFormats: ["rgba16float"],
 				depthReadOnly: false,
 				depthStencilFormat: "depth32float",
 				sampleCount: 4,
-			}),
+			},
 			shadows: [],
 		};
 		this.renderBundles = {
@@ -1195,14 +1206,14 @@ export default class Renderer {
 			shadows: [],
 		};
 		for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
-			this.renderBundleEncoders.shadows.push(
-				this.device.createRenderBundleEncoder({
+			this.renderBundleDescriptors.shadows.push(
+				{
 					label: `Shadow Pass ${i} Encoder`,
 					colorFormats: [],
 					depthReadOnly: false,
 					depthStencilFormat: "depth32float",
 					sampleCount: 1,
-				}),
+				},
 			);
 			this.renderBundles.shadows.push(null);
 		}
@@ -1258,9 +1269,8 @@ export default class Renderer {
 		this.onLightingLoad();
 
 		this.addObject(this.resources.scene, "static");
-		this.updateInstanceBufferData("static");
-
-		for (let i = 0; i < 5000; i++) {
+		
+		for (let i = 0; i < 500; i++) {
 			const obj = this.addObject(this.resources.monke, "dynamic");
 			obj.model.castShadows = false;
 			obj.model.transform.position[0] = (Math.random() - 0.5) * 300.0;
@@ -1268,8 +1278,10 @@ export default class Renderer {
 			obj.model.transform.position[2] = (Math.random() - 0.5) * 300.0;
 			obj.model.update(this.device, this.camera);
 		}
-
+		
+		this.updateInstanceBufferData("static");
 		this.updateRenderBundles();
+		this.updateInstanceBufferData("dynamic");
 	}
 
 	/**
@@ -1999,6 +2011,8 @@ export default class Renderer {
 				resolveTarget: this.ctx.getCurrentTexture().createView(),
 			},
 		];
+
+		this.updateRenderBundles();
 	}
 
 	/**
@@ -2247,21 +2261,21 @@ export default class Renderer {
 			return;
 		}
 
-		let encoder = this.renderBundleEncoders.depth;
+		let encoder = this.device.createRenderBundleEncoder(this.renderBundleDescriptors.depth);
 		encoder.setPipeline(this.pipelines.depth);
 		encoder.setBindGroup(1, this.globalUniformBindGroups.camera);
 		this.drawScene(encoder, false);
 		this.renderBundles.depth = encoder.finish();
 
 		for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
-			encoder = this.renderBundleEncoders.shadows[i];
+			encoder = this.device.createRenderBundleEncoder(this.renderBundleDescriptors.shadows[i]);
 			encoder.setPipeline(this.pipelines.shadows);
 			encoder.setBindGroup(1, this.globalUniformBindGroups.shadows[i]);
 			this.drawScene(encoder, true);
 			this.renderBundles.shadows[i] = encoder.finish();
 		}
 
-		encoder = this.renderBundleEncoders.sceneDraw;
+		encoder = this.device.createRenderBundleEncoder(this.renderBundleDescriptors.sceneDraw);
 		encoder.setPipeline(this.pipelines.PBR);
 		encoder.setBindGroup(1, this.globalUniformBindGroups.camera);
 		encoder.setBindGroup(2, this.globalUniformBindGroups.depth);
