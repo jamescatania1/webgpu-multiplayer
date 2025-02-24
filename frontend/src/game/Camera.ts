@@ -146,9 +146,11 @@ export default class Camera {
 				}
 			}
 
-			const shadowZMultiplier = 10.0;
+			const shadowZMultiplier = 8.0;
 			this.minComponents[2] *= this.minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier;
 			this.maxComponents[2] *= this.maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier;
+
+			// console.log(`cascade ${c}`, this.minComponents[2], this.maxComponents[2]);
 
 			mat4.ortho(
 				this.minComponents[0],

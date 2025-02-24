@@ -38,30 +38,39 @@ export const SHADOW_SETTINGS = {
 	fadeDistance: 10.0,
 	cascades: [
 		{
-			depthScale: 300.0,
 			near: 0.1,
-			far: 7.0,
-			bias: 0.00015,
-			normalBias: 0.1,
-			samples: 24,
+			far: 5.0,
+			radius: 8.0,
+			bias: 0.00017,
+			normalBias: 0.15,
+			samples: 48,
 			blockerSamples: 24,
 		},
 		{
-			depthScale: 300.0,
-			near: 6.1,
-			far: 30.0,
+			near: 4.0,
+			far: 15.0,
+			radius: 5.0,
 			bias: 0.00025,
-			normalBias: 0.15,
+			normalBias: 0.1,
 			samples: 16,
+			blockerSamples: 24,
+		},
+		{
+			near: 13.0,
+			far: 35.0,
+			radius: 3.0,
+			bias: 0.00035,
+			normalBias: 0.15,
+			samples: 8,
 			blockerSamples: 16,
 		},
 		{
-			depthScale: 300.0,
-			near: 25.0,
+			near: 31.0,
 			far: 100.0,
-			bias: 0.00025,
+			radius: 1.0,
+			bias: 0.00035,
 			normalBias: 0.3,
-			samples: 12,
+			samples: 4,
 			blockerSamples: 12,
 		},
 	],
@@ -413,6 +422,22 @@ export default class Renderer {
 					visibility: GPUShaderStage.FRAGMENT,
 					buffer: {},
 				},
+				{
+					binding: 11,
+					visibility: GPUShaderStage.FRAGMENT,
+					texture: {
+						multisampled: false,
+						sampleType: "float",
+						viewDimension: "3d",
+					}
+				},
+				{
+					binding: 12,
+					visibility: GPUShaderStage.FRAGMENT,
+					sampler: {
+						type: "filtering",
+					}
+				}
 			],
 		});
 		const ssaoBindGroupLayout = this.device.createBindGroupLayout({
@@ -2054,7 +2079,7 @@ export default class Renderer {
 		for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
 			this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].view, i * cascadeBufferSize + 0);
 			this.uniformBufferData.shadows.set(this.camera.cascadeMatrices[i].proj, i * cascadeBufferSize + 16);
-			this.uniformBufferData.shadows[i * cascadeBufferSize + 32] = SHADOW_SETTINGS.cascades[i].depthScale;
+			this.uniformBufferData.shadows[i * cascadeBufferSize + 32] = SHADOW_SETTINGS.cascades[i].radius;
 			this.uniformBufferData.shadows[i * cascadeBufferSize + 33] = SHADOW_SETTINGS.cascades[i].bias;
 			this.uniformBufferData.shadows[i * cascadeBufferSize + 34] = SHADOW_SETTINGS.cascades[i].normalBias;
 			this.uniformBufferData.shadows[i * cascadeBufferSize + 35] = SHADOW_SETTINGS.cascades[i].samples;
@@ -2194,6 +2219,30 @@ export default class Renderer {
 		new Float32Array(shadowKernelBuffer.getMappedRange()).set(shadowKernel);
 		shadowKernelBuffer.unmap();
 
+		const shadowNoiseSize = 128;
+		const shadowNoiseTexture = this.device.createTexture({
+			"label": "shadow noise texture",
+			format: "rg8unorm",
+			dimension: "3d",
+			size: [shadowNoiseSize, shadowNoiseSize, shadowNoiseSize],
+			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+			sampleCount: 1,
+		});
+		const shadowNoiseData = new Uint8Array(shadowNoiseSize * shadowNoiseSize * shadowNoiseSize * 2);
+		for (let i = 0; i < shadowNoiseData.length; i++) {
+			shadowNoiseData[i] = Math.random() * 255;
+		}
+		this.device.queue.writeTexture(
+			{
+				texture: shadowNoiseTexture,
+				mipLevel: 0,
+				origin: { x: 0, y: 0, z: 0 },
+			},
+			shadowNoiseData,
+			{ bytesPerRow: 2 * shadowNoiseSize, rowsPerImage: shadowNoiseSize },
+			{ width: shadowNoiseSize, height: shadowNoiseSize, depthOrArrayLayers: shadowNoiseSize },
+		);
+
 		const sceneBindGroup = this.device.createBindGroup({
 			label: "ssao bind group",
 			layout: this.globalUniformBindGroupLayouts.scene,
@@ -2246,6 +2295,21 @@ export default class Renderer {
 					binding: 10,
 					resource: { buffer: shadowKernelBuffer, offset: 0, size: shadowKernel.byteLength },
 				},
+				{
+					binding: 11,
+					resource: shadowNoiseTexture.createView(),
+				},
+				{
+					binding: 12,
+					resource: this.device.createSampler({
+						minFilter: "linear",
+						magFilter: "linear",
+						mipmapFilter: "linear",
+						addressModeU: "repeat",
+						addressModeV: "repeat",
+						addressModeW: "repeat",
+					}),
+				}
 			],
 		});
 		this.globalUniformBindGroups.scene = sceneBindGroup;

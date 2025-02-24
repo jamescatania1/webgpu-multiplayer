@@ -16,7 +16,7 @@ struct CulledInstances {
 struct ShadowData {
     view_matrix: mat4x4<f32>,
     proj_matrix: mat4x4<f32>,
-    depth_scale: f32,
+    radius: f32,
     bias: f32,
     normal_bias: f32,
     pcf_radius: f32,
@@ -50,6 +50,6 @@ fn vs(in: VertexIn) -> VertexOut {
 }
 
 @fragment 
-fn fs(in: VertexOut) -> @location(0) vec4f {
-    return vec4f((in.pos.z + u_shadow.bias) * u_shadow.depth_scale, 1.0, 1.0, 1.0);
+fn fs(in: VertexOut) {
+    // return vec4f((in.pos.z + u_shadow.bias) * u_shadow.depth_scale, 1.0, 1.0, 1.0);
 }

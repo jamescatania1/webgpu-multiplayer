@@ -68,7 +68,7 @@ fn compute_ssao(in: ComputeIn) {
 
         let range_check: f32 = smoothstep(0.0, 1.0, ssao_radius / abs(view_pos.z - sample_depth));
         let d_z = sample_depth - sample_pos.z;
-        if (d_z > ssao_bias) {
+        if (d_z > ssao_bias && d_z < ssao_radius) {
             occlusion += 1.0 * range_check;
         }
     }
