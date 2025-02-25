@@ -1,6 +1,7 @@
 import { vec3, type Vec3 } from "wgpu-matrix";
 import Transform from "./Transform";
 import type Camera from "./Camera";
+import { camera } from "./Camera";
 
 export type ModelData = {
 	name: string;
@@ -29,21 +30,27 @@ enum ModelReadState {
 	Done,
 }
 
+export type ModelDescriptor = {
+	mesh: ModelData;
+	castShadows: boolean;
+}
+
 export default class Model {
 	public readonly modelData: ModelData;
 	public readonly transform: Transform;
 	public metallic = 0.0;
 	public roughness = 1.0;
 	public ao = 1.0;
-	public castShadows = true;
+	public castShadows: boolean;
 
-	constructor(device: GPUDevice, camera: Camera, modelData: ModelData) {
-		this.modelData = modelData;
-		this.transform = new Transform(camera, modelData.offset, modelData.scale);
-		this.update(device, camera);
+	constructor(descriptor: ModelDescriptor) {
+		this.modelData = descriptor.mesh;
+		this.castShadows = descriptor.castShadows;
+		this.transform = new Transform(camera, this.modelData.offset, this.modelData.scale);
+		this.update();
 	}
 
-	public update(device: GPUDevice, camera: Camera) {
+	public update() {
 		this.transform.update(camera);
 	}
 }

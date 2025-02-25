@@ -6,6 +6,8 @@ type CascadeTransform = {
 	proj: Mat4;
 };
 
+export let camera: Camera;
+
 export default class Camera {
 	public position = vec3.create();
 	public fov = 85;
@@ -58,6 +60,7 @@ export default class Camera {
 	private readonly maxComponents = vec3.create();
 
 	constructor(canvas: HTMLCanvasElement) {
+		camera = this;
 		this.position[1] = 2.0;
 		this.cascadeMatrices = SHADOW_SETTINGS.cascades.map((_) => {
 			return {
@@ -146,7 +149,7 @@ export default class Camera {
 				}
 			}
 
-			const shadowZMultiplier = 8.0;
+			const shadowZMultiplier = 20.0;
 			this.minComponents[2] *= this.minComponents[2] < 0 ? shadowZMultiplier : 1.0 / shadowZMultiplier;
 			this.maxComponents[2] *= this.maxComponents[2] < 0 ? 1.0 / shadowZMultiplier : shadowZMultiplier;
 

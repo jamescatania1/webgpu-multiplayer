@@ -4,14 +4,14 @@ struct TransformData {
     normal_matrix: mat3x3<f32>,
     model_offset: vec3<f32>,
     model_scale: vec3<f32>,
-    cast_shadows: u32,
+    cast_shadows: f32,
 }
 @group(0) @binding(0) var<storage, read> u_transform: array<TransformData>;
 
 struct CulledInstances {
     instances: array<u32>,
 }
-@group(0) @binding(2) var<storage, read> u_culled: CulledInstances;
+@group(0) @binding(1) var<storage, read> u_culled: CulledInstances;
 
 struct ShadowData {
     view_matrix: mat4x4<f32>,
@@ -19,9 +19,13 @@ struct ShadowData {
     radius: f32,
     bias: f32,
     normal_bias: f32,
-    pcf_radius: f32,
+    samples: f32,
+    blocker_samples: f32,
     near: f32,
     far: f32,
+    align_padding_1: vec4<f32>,
+    align_padding_2: vec4<f32>,
+    align_padding_3: mat4x4<f32>,
 }
 @group(1) @binding(0) var<uniform> u_shadow: ShadowData;
 
