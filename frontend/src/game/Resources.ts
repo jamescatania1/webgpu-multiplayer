@@ -8,6 +8,7 @@ export type ResourceAtlas = {
 	scene: ModelData;
 	city: ModelData;
 	sky: HDRData;
+	noise: GPUTexture;
 };
 
 const resourceDescriptors = {
@@ -23,6 +24,11 @@ const resourceDescriptors = {
 			minComponent: 100.0,
 		},
 	},
+	images: {
+		noise: {
+			url: "/noise.bmp",
+		}
+	}
 };
 
 export const loadResources = async (device: GPUDevice): Promise<ResourceAtlas> => {
@@ -38,7 +44,23 @@ export const loadResources = async (device: GPUDevice): Promise<ResourceAtlas> =
 		res[key] = hdr;
 		return res;
 	});
-	const resources = await Promise.all([...modelPromises, ...hdrPromises]);
+	const imagePromises = Object.entries(resourceDescriptors.images).map(async ([key, desc]) => {
+		const data = await fetch(desc.url);
+		const blob = await data.blob();
+		const bitmap = await createImageBitmap(blob);
+		const image = await device.createTexture({
+			label: "blue noise texture",
+			size: [bitmap.width, bitmap.height, 1],
+			format: "r16float",
+			usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+		});
+		device.queue.copyExternalImageToTexture({ source: bitmap, }, { texture: image }, [bitmap.width, bitmap.height, 1]);
+		const res: any = {};
+		res[key] = image;
+		return res;
+	});
+
+	const resources = await Promise.all([...modelPromises, ...hdrPromises, ...imagePromises]);
 	const atlas: any = {};
 	for (const resource of resources) {
 		for (const [key, data] of Object.entries(resource)) {
