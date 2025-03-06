@@ -3,8 +3,7 @@ import { mat4, vec2, vec3, vec4, type Mat4, type Vec2, type Vec3, type Vec4 } fr
 import type Input from "./Input";
 import type { RenderContext } from "./Game";
 import { loadShaders, type Shaders } from "./Shaders";
-import Transform from "./Transform";
-import Model, { loadBOBJ, type ModelData } from "./Model";
+import Model, { type ModelData } from "./Model";
 import Sky from "./Sky";
 import { loadResources, type ResourceAtlas } from "./Resources";
 
@@ -196,15 +195,19 @@ export default class Renderer {
 		ssao: GPUBindGroup | null;
 		ssaoBlurX: GPUBindGroup | null;
 		ssaoBlurY: GPUBindGroup | null;
+		shadowBlurX: GPUBindGroup | null;
+		shadowBlurY: GPUBindGroup | null;
 		ssaoBlurKernelX: GPUBindGroup | null;
 		ssaoBlurKernelY: GPUBindGroup | null;
 		ssaoUpscale: GPUBindGroup | null;
+		compositing: GPUBindGroup | null;
 		drawTexture: GPUBindGroup | null;
 	};
 	private readonly pipelines: {
 		PBR: GPURenderPipeline;
 		depth: GPURenderPipeline;
 		shadows: GPURenderPipeline;
+		composite: GPURenderPipeline;
 		postFX: GPURenderPipeline;
 		ssao: GPUComputePipeline;
 		ssaoBlurX: GPUComputePipeline;
@@ -217,17 +220,21 @@ export default class Renderer {
 	private readonly renderBundleDescriptors: {
 		sceneDraw: GPURenderBundleEncoderDescriptor;
 		depth: GPURenderBundleEncoderDescriptor;
+		skybox: GPURenderBundleEncoderDescriptor;
 		shadows: GPURenderBundleEncoderDescriptor[];
 	};
 	private renderBundles: {
 		sceneDraw: GPURenderBundle | null;
 		depth: GPURenderBundle | null;
+		skybox: GPURenderBundle | null;
 		shadows: (GPURenderBundle | null)[];
 	};
 	private renderPassDescriptors: {
 		depthPass: GPURenderPassDescriptor;
 		shadowPass: GPURenderPassDescriptor[];
 		sceneDraw: GPURenderPassDescriptor;
+		skybox: GPURenderPassDescriptor;
+		composite: GPURenderPassDescriptor;
 		postFX: GPURenderPassDescriptor;
 	};
 	private computePassDescriptors: {
@@ -235,6 +242,8 @@ export default class Renderer {
 		ssaoBlurX: GPUComputePassDescriptor;
 		ssaoBlurY: GPUComputePassDescriptor;
 		ssaoUpscale: GPUComputePassDescriptor;
+		shadowBlurX: GPUComputePassDescriptor;
+		shadowBlurY: GPUComputePassDescriptor;
 		bloomDownsample: GPUComputePassDescriptor[];
 		bloomUpsample: GPUComputePassDescriptor[];
 		culling: GPUComputePassDescriptor;
@@ -803,11 +812,20 @@ export default class Renderer {
 			fragment: {
 				module: this.shaders.PBR,
 				entryPoint: "fs",
-				targets: [{ format: "rgba16float" }],
+				targets: [
+					{
+						format: "rgba16float",
+					},
+					{
+						format: "rgba16float",
+					},
+					{
+						format: "rgba16float",
+					}
+				],
 				constants: {
 					// near: this.camera.near,
 					// far: this.camera.far,
-					ambient_intensity: SKY_SETTINGS.ambientIntensity,
 					debug_cascades: SHADOW_SETTINGS.debugCascades ? 1 : 0,
 					shadow_fade_distance: SHADOW_SETTINGS.fadeDistance,
 					fog_start: SKY_SETTINGS.fogStart,
@@ -823,6 +841,42 @@ export default class Renderer {
 				depthWriteEnabled: false,
 				depthCompare: "equal",
 				format: "depth32float",
+			},
+			multisample: {
+				count: 4,
+			},
+		});
+		const compositePipeline = this.device.createRenderPipeline({
+			label: "light compositing pipeline",
+			layout: "auto",
+			vertex: {
+				module: this.shaders.composite,
+				entryPoint: "vs",
+				buffers: [
+					{
+						arrayStride: 8,
+						stepMode: "vertex",
+						attributes: [
+							{
+								shaderLocation: 0,
+								offset: 0,
+								format: "float32x2",
+							},
+						],
+					},
+				],
+			},
+			fragment: {
+				module: this.shaders.composite,
+				entryPoint: "fs",
+				targets: [{ format: "rgba16float" }],
+				constants: {
+					ambient_intensity: SKY_SETTINGS.ambientIntensity,
+				}
+			},
+			primitive: {
+				topology: "triangle-strip",
+				cullMode: "back",
 			},
 			multisample: {
 				count: 4,
@@ -984,6 +1038,7 @@ export default class Renderer {
 			depth: depthPrepassRenderPipeline,
 			shadows: shadowDepthRenderPipeline,
 			PBR: PBRRenderPipeline,
+			composite: compositePipeline,
 			postFX: postFXPipeline,
 			ssao: ssaoComputePipeline,
 			ssaoBlurX: ssaoBlurXComputePipeline,
@@ -1154,9 +1209,12 @@ export default class Renderer {
 			ssao: null,
 			ssaoBlurX: null,
 			ssaoBlurY: null,
+			shadowBlurX: null,
+			shadowBlurY: null,
 			ssaoUpscale: null,
 			bloomDownsample: null,
 			bloomUpsample: null,
+			compositing: null,
 			drawTexture: null,
 		};
 
@@ -1194,6 +1252,15 @@ export default class Renderer {
 				colorAttachments: [],
 				depthStencilAttachment: undefined,
 			},
+			skybox: {
+				label: "Skybox Draw",
+				colorAttachments: [],
+				depthStencilAttachment: undefined,
+			},
+			composite: {
+				label: "Light Composite Pass",
+				colorAttachments: [],
+			},
 			postFX: {
 				label: "Post FX Pass",
 				colorAttachments: [],
@@ -1216,7 +1283,7 @@ export default class Renderer {
 		this.renderBundleDescriptors = {
 			sceneDraw: {
 				label: "Scene Pass Encoder",
-				colorFormats: ["rgba16float"],
+				colorFormats: ["rgba16float", "rgba16float", "rgba16float"],
 				depthReadOnly: true,
 				depthStencilFormat: "depth32float",
 				sampleCount: 4,
@@ -1228,11 +1295,19 @@ export default class Renderer {
 				depthStencilFormat: "depth32float",
 				sampleCount: 4,
 			},
+			skybox: {
+				label: "Skybox Pass Encoder",
+				colorFormats: ["rgba16float"],
+				depthReadOnly: true,
+				depthStencilFormat: "depth32float",
+				sampleCount: 4,
+			},
 			shadows: [],
 		};
 		this.renderBundles = {
 			sceneDraw: null,
 			depth: null,
+			skybox: null,
 			shadows: [],
 		};
 		for (let i = 0; i < SHADOW_SETTINGS.cascades.length; i++) {
@@ -1258,6 +1333,12 @@ export default class Renderer {
 			},
 			ssaoUpscale: {
 				label: "SSAO Upscale Pass",
+			},
+			shadowBlurX: {
+				label: "Shadow Blur Pass X",
+			},
+			shadowBlurY: {
+				label: "Shadow Blur Pass Y",
 			},
 			culling: {
 				label: "Frustum Culling",
@@ -1656,7 +1737,7 @@ export default class Renderer {
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
 
-		// scene draw color texture
+		// temp draw color texture -- used for bloom
 		const sceneDrawTexture = this.device.createTexture({
 			label: "scene draw texture",
 			size: [renderWidth, renderHeight],
@@ -1666,7 +1747,7 @@ export default class Renderer {
 		});
 		const sceneDrawView = sceneDrawTexture.createView();
 
-		// resolve texture for post-processing output
+		// temp scene resolve output
 		const sceneResolveTexture = this.device.createTexture({
 			label: "scene single-sample resolve texture",
 			size: [renderWidth, renderHeight],
@@ -1675,6 +1756,72 @@ export default class Renderer {
 			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 		const sceneResolveView = sceneResolveTexture.createView();
+
+		const ambientTexture = this.device.createTexture({
+			label: "ambient light output texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 4,
+			format: "rgba16float",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const ambientTextureView = ambientTexture.createView();
+		const ambientResolveTexture = this.device.createTexture({
+			label: "ambient light resolve texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 1,
+			format: "rgba16float",
+			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const ambientResolveView = ambientResolveTexture.createView();
+
+		const directionalTexture = this.device.createTexture({
+			label: "directional light output texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 4,
+			format: "rgba16float",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const directionalResolveTexture = this.device.createTexture({
+			label: "directional light resolve texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 1,
+			format: "rgba16float",
+			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+
+		const shadowResultTexture = this.device.createTexture({
+			label: "shadow result texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 4,
+			format: "rgba16float",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const shadowResultResolveTexture = this.device.createTexture({
+			label: "shadow resolve texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 1,
+			format: "rgba16float",
+			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const shadowResultResolveView = shadowResultResolveTexture.createView();
+
+		const shadowResultBlurXTexture = this.device.createTexture({
+			label: "shadow resolve texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 1,
+			format: "rgba16float",
+			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+		});
+		const shadowResultBlurXView = shadowResultBlurXTexture.createView();
+
+		const shadowResultBlurTexture = this.device.createTexture({
+			label: "shadow resolve texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 1,
+			format: "rgba16float",
+			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+		});
+		const shadowResultBlurView = shadowResultBlurTexture.createView();
 
 		// ssao output texture
 		const ssaoResolution = [Math.ceil(renderWidth / 2), Math.ceil(renderHeight / 2)];
@@ -1788,6 +1935,33 @@ export default class Renderer {
 			],
 		});
 
+		this.globalUniformBindGroups.compositing = this.device.createBindGroup({
+			label: "light compositing textures bind group",
+			layout: this.pipelines.composite.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: this.postFXQuad.sampler,
+				},
+				{
+					binding: 1,
+					resource: ambientResolveView,
+				},
+				{
+					binding: 2,
+					resource: directionalResolveTexture.createView(),
+				},
+				{
+					binding: 3,
+					resource: shadowResultBlurView,
+				},
+				{
+					binding: 4,
+					resource: ssaoUpscaleTexture.createView(),
+				}
+			]
+		})
+
 		// bind group for the post processing textures
 		this.globalUniformBindGroups.drawTexture = this.device.createBindGroup({
 			label: "post processing draw texture bind group",
@@ -1804,6 +1978,7 @@ export default class Renderer {
 						baseMipLevel: 0,
 						mipLevelCount: 1,
 					}),
+					// resource: shadowResultBlurView,
 				},
 			],
 		});
@@ -1887,6 +2062,44 @@ export default class Renderer {
 				{
 					binding: 2,
 					resource: ssaoUpscaleTexture.createView(),
+				},
+			],
+		});
+
+		this.globalUniformBindGroups.shadowBlurX = this.device.createBindGroup({
+			label: "shadow result horizontal blur bind group",
+			layout: this.pipelines.ssaoBlurX.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: shadowResultResolveView,
+				},
+				{
+					binding: 1,
+					resource: filterSampler,
+				},
+				{
+					binding: 2,
+					resource: shadowResultBlurXView,
+				},
+			],
+		});
+
+		this.globalUniformBindGroups.shadowBlurY = this.device.createBindGroup({
+			label: "shadow result vertical blur bind group",
+			layout: this.pipelines.ssaoBlurY.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: shadowResultBlurXView,
+				},
+				{
+					binding: 1,
+					resource: filterSampler,
+				},
+				{
+					binding: 2,
+					resource: shadowResultBlurView,
 				},
 			],
 		});
@@ -2013,10 +2226,24 @@ export default class Renderer {
 		(this.renderPassDescriptors.sceneDraw as any).colorAttachments = [
 			{
 				clearValue: [0.0, 0.0, 0.0, 1.0],
+				loadOp: "load",
+				storeOp: "store",
+				view: ambientTextureView,
+				resolveTarget: ambientResolveView,
+			},
+			{
+				clearValue: [0.0, 0.0, 0.0, 1.0],
 				loadOp: "clear",
 				storeOp: "store",
-				view: sceneDrawView,
-				resolveTarget: sceneResolveView,
+				view: directionalTexture.createView(),
+				resolveTarget: directionalResolveTexture.createView(),
+			},
+			{
+				clearValue: [0.0, 0.0, 0.0, 1.0],
+				loadOp: "clear",
+				storeOp: "store",
+				view: shadowResultTexture.createView(),
+				resolveTarget: shadowResultResolveTexture.createView(),
 			},
 		];
 		(this.renderPassDescriptors.sceneDraw as any).depthStencilAttachment = {
@@ -2025,6 +2252,32 @@ export default class Renderer {
 			}),
 			depthReadOnly: true,
 		};
+
+		(this.renderPassDescriptors.skybox as any).colorAttachments = [
+			{
+				clearValue: [0.0, 0.0, 0.0, 1.0],
+				loadOp: "clear",
+				storeOp: "store",
+				view: ambientTextureView,
+				resolveTarget: ambientResolveView,
+			},
+		];
+		(this.renderPassDescriptors.skybox as any).depthStencilAttachment = {
+			view: depthTexture.createView({
+				usage: GPUTextureUsage.RENDER_ATTACHMENT,
+			}),
+			depthReadOnly: true,
+		};
+
+		(this.renderPassDescriptors.composite as any).colorAttachments = [
+			{
+				clearValue: [0.0, 0.0, 0.0, 1.0],
+				loadOp: "clear",
+				storeOp: "store",
+				view: sceneDrawView,
+				resolveTarget: sceneResolveView,
+			},
+		];
 
 		(this.renderPassDescriptors.postFX as any).colorAttachments = [
 			{
@@ -2305,7 +2558,7 @@ export default class Renderer {
 				},
 				{
 					binding: 11,
-					resource: this.resources?.noise.createView(),
+					resource: this.resources!.noise.createView(),
 				},
 				{
 					binding: 12,
@@ -2353,15 +2606,17 @@ export default class Renderer {
 		encoder.setBindGroup(2, this.globalUniformBindGroups.depth);
 		encoder.setBindGroup(3, this.globalUniformBindGroups.scene);
 		this.drawScene(encoder, 0);
+		this.renderBundles.sceneDraw = encoder.finish();
 		if (this.sky && this.sky.skyboxRenderData) {
+			encoder = this.device.createRenderBundleEncoder(this.renderBundleDescriptors.skybox);
 			encoder.setPipeline(this.sky.skyboxRenderData.pipeline);
 			encoder.setBindGroup(0, this.sky.skyboxRenderData.cameraBindGroup);
 			encoder.setBindGroup(1, this.sky.skyboxRenderData.textureBindGroup);
 			encoder.setVertexBuffer(0, this.sky.skyboxRenderData.vertexBuffer);
 			encoder.setIndexBuffer(this.sky.skyboxRenderData.indexBuffer, "uint16");
 			encoder.drawIndexed(36);
+			this.renderBundles.skybox = encoder.finish();
 		}
-		this.renderBundles.sceneDraw = encoder.finish();
 	}
 
 	private drawScene(pass: GPURenderPassEncoder | GPURenderBundleEncoder, cullIndex: number) {
@@ -2566,11 +2821,42 @@ export default class Renderer {
 		}
 
 		if (this.globalUniformBindGroups.scene) {
+			const skyboxPass = encoder.beginRenderPass(this.renderPassDescriptors.skybox);
+			if (this.renderBundles.skybox) {
+				skyboxPass.executeBundles([this.renderBundles.skybox]);
+			}
+			skyboxPass.end();
 			const drawPass = encoder.beginRenderPass(this.renderPassDescriptors.sceneDraw!);
 			if (this.renderBundles.sceneDraw) {
 				drawPass.executeBundles([this.renderBundles.sceneDraw]);
 			}
 			drawPass.end();
+
+			// shadow result blur pass
+			let shadowBlurPass = encoder.beginComputePass(this.computePassDescriptors.ssaoBlurX);
+			shadowBlurPass.setPipeline(this.pipelines.ssaoBlurX);
+			shadowBlurPass.setBindGroup(0, this.globalUniformBindGroups.shadowBlurX);
+			shadowBlurPass.setBindGroup(1, this.globalUniformBindGroups.ssaoBlurKernelX);
+			shadowBlurPass.dispatchWorkgroups(Math.ceil(renderWidth / 8), Math.ceil(renderHeight / 8), 1);
+			shadowBlurPass.end();
+
+			shadowBlurPass = encoder.beginComputePass(this.computePassDescriptors.ssaoBlurY);
+			shadowBlurPass.setPipeline(this.pipelines.ssaoBlurY);
+			shadowBlurPass.setBindGroup(0, this.globalUniformBindGroups.shadowBlurY);
+			shadowBlurPass.setBindGroup(1, this.globalUniformBindGroups.ssaoBlurKernelY);
+			shadowBlurPass.dispatchWorkgroups(Math.ceil(renderWidth / 8), Math.ceil(renderHeight / 8), 1);
+			shadowBlurPass.end();
+		}
+
+		{
+			// light compositing pass
+			const compositePass = encoder.beginRenderPass(this.renderPassDescriptors.composite!);
+			compositePass.setPipeline(this.pipelines.composite);
+
+			compositePass.setBindGroup(0, this.globalUniformBindGroups.compositing);
+			compositePass.setVertexBuffer(0, this.postFXQuad.vertexBuffer);
+			compositePass.draw(5);
+			compositePass.end();
 		}
 
 		if (this.globalUniformBindGroups.bloomDownsample && this.globalUniformBindGroups.bloomUpsample) {

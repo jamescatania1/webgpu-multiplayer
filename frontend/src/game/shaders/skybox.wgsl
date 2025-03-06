@@ -16,8 +16,7 @@ struct VertexOut {
 };
 
 struct FragmentOut {
-    @location(0) color: vec4f,
-    @location(1) occlusion: vec4f,
+    @location(0) ambient: vec4<f32>,
 };
 
 @vertex 
@@ -35,7 +34,6 @@ fn fs(in: VertexOut) -> FragmentOut {
     sky = pow(sky, vec3<f32>(1.0 / (gamma + gamma_offset)));
 
     var out: FragmentOut;
-    out.color = vec4<f32>(sky, 1.0);
-    out.occlusion = vec4<f32>(1.0);
+    out.ambient = vec4<f32>(sky, 1.0);
     return out;
 }

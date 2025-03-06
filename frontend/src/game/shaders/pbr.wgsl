@@ -1,6 +1,5 @@
 override near: f32;
 override far: f32;
-override ambient_intensity: f32;
 override debug_cascades: bool;
 override shadow_fade_distance: f32;
 override fog_start: f32;
@@ -87,8 +86,9 @@ struct VertexOut {
 };
 
 struct FragmentOut {
-    @location(0) color: vec4<f32>,
-    @location(1) occlusion: vec4<f32>,
+    @location(0) ambient: vec4<f32>,
+    @location(1) directional: vec4<f32>,
+    @location(2) shadow_result: vec4<f32>,
 };
 
 @vertex 
@@ -234,8 +234,6 @@ fn fs(in: VertexOut) -> FragmentOut {
 
     // SSAO
     let occlusion: f32 = 1.0 - textureSample(u_ssao, u_scene_sampler, in.pos.xy / u_screen_size).r;
-    light += ambient * ambient_intensity;
-
 
     var color: vec3<f32> = light;
 
@@ -256,8 +254,10 @@ fn fs(in: VertexOut) -> FragmentOut {
     }
 
     var out: FragmentOut;
-    out.color = vec4<f32>(color * occlusion, 1.0);
-    out.occlusion = vec4<f32>(color, 1.0);
+    // out.color = vec4<f32>(color * occlusion, 1.0);
+    out.ambient = vec4<f32>(ambient, 1.0);
+    out.directional = vec4<f32>(directional, 1.0);
+    out.shadow_result = vec4<f32>(vec3<f32>(shadow_factor), 1.0);
     return out;
 }
 
