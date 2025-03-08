@@ -88,7 +88,8 @@ struct VertexOut {
 struct FragmentOut {
     @location(0) ambient: vec4<f32>,
     @location(1) directional: vec4<f32>,
-    @location(2) shadow_result: vec4<f32>,
+    @location(2) fog: vec4<f32>,
+    @location(3) shadow_result: vec4<f32>,
 };
 
 @vertex 
@@ -248,6 +249,7 @@ fn fs(in: VertexOut) -> FragmentOut {
     ).rgb;
     fog_sky_color = pow(fog_sky_color, vec3<f32>(1.0 / 2.2));
     color = mix(color, fog_sky_color, fog_factor);
+    let fog_result: vec4<f32> = vec4<f32>(fog_sky_color, fog_factor);
 
     if (debug_cascades) {
         color = mix(color, visualize_cascades(in), 0.75);
@@ -257,6 +259,7 @@ fn fs(in: VertexOut) -> FragmentOut {
     // out.color = vec4<f32>(color * occlusion, 1.0);
     out.ambient = vec4<f32>(ambient, 1.0);
     out.directional = vec4<f32>(directional, 1.0);
+    out.fog = fog_result;
     out.shadow_result = vec4<f32>(vec3<f32>(shadow_factor), 1.0);
     return out;
 }

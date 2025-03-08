@@ -40,17 +40,17 @@ export const SHADOW_SETTINGS = {
 			near: 0.1,
 			far: 5.0,
 			radius: 8.0,
-			bias: 0.00017,
-			normalBias: 0.15,
-			samples: 32,
+			bias: 0.0001,
+			normalBias: 0.015,
+			samples: 40,
 			blockerSamples: 24,
 		},
 		{
 			near: 4.0,
 			far: 15.0,
 			radius: 5.0,
-			bias: 0.00025,
-			normalBias: 0.1,
+			bias: 0.0001,
+			normalBias: 0.015,
 			samples: 16,
 			blockerSamples: 24,
 		},
@@ -58,18 +58,18 @@ export const SHADOW_SETTINGS = {
 			near: 13.0,
 			far: 35.0,
 			radius: 3.0,
-			bias: 0.00035,
-			normalBias: 0.15,
-			samples: 8,
+			bias: 0.00012,
+			normalBias: 0.02,
+			samples: 16,
 			blockerSamples: 16,
 		},
 		{
 			near: 31.0,
 			far: 100.0,
 			radius: 1.0,
-			bias: 0.00035,
-			normalBias: 0.3,
-			samples: 4,
+			bias: 0.00012,
+			normalBias: 0.02,
+			samples: 8,
 			blockerSamples: 12,
 		},
 	],
@@ -81,7 +81,7 @@ export const SUN_SETTINGS = {
 	intensity: 1.5,
 };
 export const SKY_SETTINGS = {
-	ambientIntensity: 0.75,
+	ambientIntensity: 0.5,
 	skyboxSource: "sky",
 	skyboxResolution: 2048,
 	irradianceResolution: 64,
@@ -820,8 +820,11 @@ export default class Renderer {
 						format: "rgba16float",
 					},
 					{
+						format: "rgba8unorm",
+					},
+					{
 						format: "rgba16float",
-					}
+					},
 				],
 				constants: {
 					// near: this.camera.near,
@@ -869,10 +872,27 @@ export default class Renderer {
 			fragment: {
 				module: this.shaders.composite,
 				entryPoint: "fs",
-				targets: [{ format: "rgba16float" }],
+				targets: [
+					{
+						format: "rgba16float",
+						// blend: {
+						// 	color: {
+						// 		operation: "add",
+						// 		srcFactor: "one",
+						// 		dstFactor: "one-minus-src-alpha",
+						// 	},
+						// 	alpha: {
+						// 		// operation: "add",
+						// 		// srcFactor: "one",
+						// 		// dstFactor: "src-alpha",
+						// 		// operation
+						// 	},
+						// },
+					},
+				],
 				constants: {
 					ambient_intensity: SKY_SETTINGS.ambientIntensity,
-				}
+				},
 			},
 			primitive: {
 				topology: "triangle-strip",
@@ -1283,7 +1303,7 @@ export default class Renderer {
 		this.renderBundleDescriptors = {
 			sceneDraw: {
 				label: "Scene Pass Encoder",
-				colorFormats: ["rgba16float", "rgba16float", "rgba16float"],
+				colorFormats: ["rgba16float", "rgba16float", "rgba8unorm", "rgba16float"],
 				depthReadOnly: true,
 				depthStencilFormat: "depth32float",
 				sampleCount: 4,
@@ -1823,6 +1843,24 @@ export default class Renderer {
 		});
 		const shadowResultBlurView = shadowResultBlurTexture.createView();
 
+		// fog color (fog factor is in alpha channel)
+		const fogTexture = this.device.createTexture({
+			label: "fog result texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 4,
+			format: "rgba8unorm",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const fogTextureView = fogTexture.createView();
+		const fogResolveTexture = this.device.createTexture({
+			label: "fog result resolve texture",
+			size: [renderWidth, renderHeight],
+			sampleCount: 1,
+			format: "rgba8unorm",
+			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+		});
+		const fogResolveView = fogResolveTexture.createView();
+
 		// ssao output texture
 		const ssaoResolution = [Math.ceil(renderWidth / 2), Math.ceil(renderHeight / 2)];
 		const ssaoTexture = this.device.createTexture({
@@ -1953,14 +1991,18 @@ export default class Renderer {
 				},
 				{
 					binding: 3,
-					resource: shadowResultBlurView,
+					resource: fogResolveView,
 				},
 				{
 					binding: 4,
+					resource: shadowResultBlurView,
+				},
+				{
+					binding: 5,
 					resource: ssaoUpscaleTexture.createView(),
-				}
-			]
-		})
+				},
+			],
+		});
 
 		// bind group for the post processing textures
 		this.globalUniformBindGroups.drawTexture = this.device.createBindGroup({
@@ -1978,7 +2020,6 @@ export default class Renderer {
 						baseMipLevel: 0,
 						mipLevelCount: 1,
 					}),
-					// resource: shadowResultBlurView,
 				},
 			],
 		});
@@ -2226,7 +2267,7 @@ export default class Renderer {
 		(this.renderPassDescriptors.sceneDraw as any).colorAttachments = [
 			{
 				clearValue: [0.0, 0.0, 0.0, 1.0],
-				loadOp: "load",
+				loadOp: "clear",
 				storeOp: "store",
 				view: ambientTextureView,
 				resolveTarget: ambientResolveView,
@@ -2237,6 +2278,13 @@ export default class Renderer {
 				storeOp: "store",
 				view: directionalTexture.createView(),
 				resolveTarget: directionalResolveTexture.createView(),
+			},
+			{
+				clearValue: [0.0, 0.0, 0.0, 1.0],
+				loadOp: "clear",
+				storeOp: "store",
+				view: fogTextureView,
+				resolveTarget: fogResolveView,
 			},
 			{
 				clearValue: [0.0, 0.0, 0.0, 1.0],
@@ -2258,8 +2306,8 @@ export default class Renderer {
 				clearValue: [0.0, 0.0, 0.0, 1.0],
 				loadOp: "clear",
 				storeOp: "store",
-				view: ambientTextureView,
-				resolveTarget: ambientResolveView,
+				view: sceneDrawView,
+				resolveTarget: sceneResolveView,
 			},
 		];
 		(this.renderPassDescriptors.skybox as any).depthStencilAttachment = {
@@ -2272,7 +2320,7 @@ export default class Renderer {
 		(this.renderPassDescriptors.composite as any).colorAttachments = [
 			{
 				clearValue: [0.0, 0.0, 0.0, 1.0],
-				loadOp: "clear",
+				loadOp: "load",
 				storeOp: "store",
 				view: sceneDrawView,
 				resolveTarget: sceneResolveView,
@@ -2489,7 +2537,7 @@ export default class Renderer {
 		]);
 		for (let i = 0; i < shadowKernel.length; i += 2) {
 			shadowKernel[i] = shadowKernel[i] * 2.0 - 1.0;
-			shadowKernel[i+1] = shadowKernel[i+1] * 2.0 - 1.0;
+			shadowKernel[i + 1] = shadowKernel[i + 1] * 2.0 - 1.0;
 			const r = Math.sqrt(shadowKernel[i] * shadowKernel[i] + shadowKernel[i + 1] * shadowKernel[i + 1]);
 			const theta = Math.atan2(shadowKernel[i + 1], shadowKernel[i]);
 			shadowKernel[i] = r;

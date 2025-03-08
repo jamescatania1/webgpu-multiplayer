@@ -328,7 +328,7 @@ export default class Sky {
 			},
 			depthStencil: {
 				depthWriteEnabled: false,
-				depthCompare: "less-equal",
+				depthCompare: "always",
 				format: "depth32float",
 			},
 			multisample: {

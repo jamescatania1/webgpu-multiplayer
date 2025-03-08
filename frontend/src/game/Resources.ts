@@ -20,7 +20,7 @@ const resourceDescriptors = {
 	},
 	hdrs: {
 		sky: {
-			url: "/sky.hdr",
+			url: "/sky_indoor.hdr",
 			minComponent: 100.0,
 		},
 	},
